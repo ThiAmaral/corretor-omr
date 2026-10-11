@@ -22,7 +22,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $v = $_POST['q'][$i] ?? '';
         $novas[] = in_array($v, $alts, true) || $v === 'MULTIPLA' ? $v : null;
     }
-    db()->prepare("UPDATE folhas SET respostas = ?, revisar = '[]', revisada = 1 WHERE id = ?")
+    db()->prepare("UPDATE folhas SET respostas = ?, revisar = '[]', revisada = true WHERE id = ?")
         ->execute([json_encode($novas), $folha['id']]);
     redirecionar('prova.php?id=' . $prova['id'] . '&turma=' . urlencode($folha['turma']));
 }
@@ -37,7 +37,7 @@ cabecalho('Folha de ' . $folha['turma'], 'prova.php?id=' . $prova['id'] . '&turm
 <div class="revisao">
   <?php if ($folha['imagem_debug']): ?>
     <figure>
-      <img src="imagem.php?f=<?= urlencode($folha['imagem_debug']) ?>" alt="Folha lida, com as marcações identificadas">
+      <img src="imagem.php?folha=<?= (int)$folha['id'] ?>" alt="Folha lida, com as marcações identificadas">
       <figcaption>Verde: marcação lida. Laranja: leitura duvidosa.</figcaption>
     </figure>
   <?php endif; ?>

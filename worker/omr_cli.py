@@ -38,6 +38,18 @@ def expandir(caminhos):
     return arquivos
 
 
+def recortar_bolinhas(img, grade):
+    """Só a região das bolinhas, com uma margem. No modelo antigo a área da
+    moldura inclui nome, nascimento e assinatura; isso não pode ser guardado (LGPD)."""
+    bolhas = [b for grupo in grade for b in grupo]
+    r = max(b.r for b in bolhas)
+    x0 = max(int(min(b.x for b in bolhas) - 7 * r), 0)  # inclui o número da questão
+    y0 = max(int(min(b.y for b in bolhas) - 3 * r), 0)
+    x1 = int(max(b.x for b in bolhas) + 6 * r)  # espaço para o rótulo da resposta lida
+    y1 = int(max(b.y for b in bolhas) + 3 * r)
+    return img[y0:y1, x0:x1]
+
+
 def ler_arquivos(arquivos, layout, pasta_debug=None):
     saida = []
     for arq in arquivos:
@@ -54,9 +66,16 @@ def ler_arquivos(arquivos, layout, pasta_debug=None):
                 if pasta_debug:
                     os.makedirs(pasta_debug, exist_ok=True)
                     base = os.path.splitext(os.path.basename(arq))[0]
-                    destino = os.path.join(pasta_debug, f"{base}_p{n}.png")
-                    cv2.imwrite(destino, omr.desenhar_depuracao(res, layout))
+                    # JPEG: cerca de 70 KB, contra 600 KB em PNG (cabe no Storage gratuito).
+                    destino = os.path.join(pasta_debug, f"{base}_p{n}.jpg")
+                    anotada = recortar_bolinhas(omr.desenhar_depuracao(res, layout), res["_grade"])
+                    cv2.imwrite(destino, anotada, [cv2.IMWRITE_JPEG_QUALITY, 80])
                     item["imagem_debug"] = destino
+                    # Só a área de respostas, sem o cabeçalho com o nome do aluno (LGPD).
+                    recorte = os.path.join(pasta_debug, f"{base}_p{n}_area.jpg")
+                    cv2.imwrite(recorte, recortar_bolinhas(res["_folha"], res["_grade"]),
+                                [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    item["imagem_recorte"] = recorte
             except omr.ErroLeitura as e:
                 item.update(ok=False, erro=str(e))
             saida.append(item)

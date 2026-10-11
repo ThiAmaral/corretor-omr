@@ -3,11 +3,7 @@ services:
     build: .
     ports:
       - "8080:80"
-    volumes:
-      - dados:/var/www/armazenamento
+    env_file: .env                 # DATABASE_URL, SUPABASE_URL e SUPABASE_SECRET_KEY (veja .env.exemplo)
     environment:
       LIMITE_REFORCO: "60"
       PERIODO_ESCOLA: "bimestre"   # bimestre, trimestre ou semestre
-
-volumes:
-  dados:

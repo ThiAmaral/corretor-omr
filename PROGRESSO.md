@@ -12,7 +12,7 @@ Legenda: ✅ feito · 🔄 em andamento · ⏳ pendente · ⚠️ bloqueado / de
 |---|---|---|
 | 0. Preparação | 🔄 | Git pronto; faltam as folhas AMA reais e o significado do QR |
 | 1. Leitor AMA com detecção do formato | ✅ (com fotos geradas) | Falta validar com fotos reais (depende da Fase 0) |
-| 2. Supabase | ⏳ | |
+| 2. Supabase | ✅ | Testado no projeto real (`xcmyknrojawmolnffltf`). Só o Docker não foi testado (não instalado nesta máquina) |
 | 3. Revisão do gabarito, áreas e dificuldade | ⏳ | |
 | 4. Relatórios por dificuldade | ⏳ | |
 | 5. Fotos de celular | ⏳ | Parte já adiantada na Fase 1 (ver abaixo) |
@@ -124,3 +124,134 @@ causa do desfoque forte da simulação somado ao QR já borrado do PDF de origem
   outra foto. Fluxo web testado de ponta a ponta (cadastro com foto do gabarito,
   envio de 3 fotos AMA + 1 folha de outro formato, recusada).
 - **2026-10-11** — Testes `pytest` (18), README e plano atualizados.
+
+---
+
+## Fase 2: banco de dados no Supabase
+
+Início: 2026-10-11.
+
+O código foi adaptado e testado **sem** um projeto real no Supabase: o banco de
+teste foi um PostgreSQL local (PGlite, o PostgreSQL 18 compilado para
+WebAssembly, rodando em `npx pglite-server`) com a migração aplicada, e o
+Storage foi simulado por um servidor PHP que responde às mesmas rotas da API do
+Supabase Storage. Nada disso foi versionado; é só para teste.
+
+### Itens
+
+| # | Item | Situação | Observação |
+|---|---|---|---|
+| 2.1 | Criar o projeto no Supabase, `.env` com as chaves | ✅ | Projeto `xcmyknrojawmolnffltf` (São Paulo), criado pelo Thiago em 2026-10-11, que também preencheu a senha e a chave secret no `.env` (fora do git) |
+| 2.2 | Migração `supabase/migrations/20261011220051_esquema_inicial.sql` | ✅ | `supabase init` + `migration new`. Tabelas `provas`, `questoes`, `folhas`, RLS ligado e sem políticas. Também cria os buckets `folhas` e `anotadas` |
+| 2.2 | Aplicar no projeto (`npx supabase link` + `db push`) | ✅ | 2026-10-11, pelo Thiago: `20261011220051_esquema_inicial.sql` aplicada sem erro. Session pooler em `aws-1-sa-east-1` |
+| 2.3 | `pdo_pgsql` no Docker e no `iniciar.cmd` | ✅ | `iniciar.cmd` liga `pdo_pgsql`, `curl` e `openssl` com `-d`, sem editar o `php.ini`; recusa subir sem `.env` |
+| 2.3 | `db()` lê a `DATABASE_URL`; sem `CREATE TABLE`/`PRAGMA` | ✅ | `.env` lido pelo PHP quando roda sem Docker; no Docker, `env_file` |
+| 2.3 | Diferenças SQLite → PostgreSQL | ✅ | `RETURNING id`, `revisada = true`, `NULLS LAST`, gabarito na tabela `questoes`, JSON em `jsonb` |
+| 2.3 | Imagens no Storage | ✅ | Só a área de respostas recortada (`folhas`) e a anotada (`anotadas`), em JPEG. A foto enviada e o gabarito ficam numa pasta temporária apagada no fim da requisição |
+| 2.3 | `imagem.php` com URL assinada | ✅ | `imagem.php?folha=<id>` busca o caminho no banco e redireciona para uma URL que vale 5 minutos |
+| 2.3 | Começar com o banco vazio | ✅ | Os dados do SQLite eram de teste; nada foi migrado. A pasta `armazenamento/` deixa de ser usada |
+| — | Teste do fluxo com o projeto real | ✅ | Ver "Teste no projeto real" abaixo |
+
+### Resultados do teste local
+
+| Teste | Resultado |
+|---|---|
+| Migração aplicada no PostgreSQL 18 | 3 tabelas e 2 buckets criados, sem erro |
+| Cadastro da prova AMA com foto do gabarito | Caderno `2265M0801` e blocos `[7, 7, 7, 5]` gravados no `layout`; 26 linhas em `questoes` |
+| Envio das 20 fotos de `geradas_8A` | 20/20 lidas; 40 envios ao Storage; acerto da turma **63,1%**, igual ao `omr_cli.py corrigir` |
+| Folha do modelo antigo enviada na prova AMA | Recusada com o motivo, sem imagem guardada |
+| Modelo antigo: gabarito digitado, PDF da 7A + 10 fotos da 7B | 12 + 10 lidas; acerto e áreas iguais ao `omr_cli.py` (61,25% na 7A aparece como 61,3% no PHP e 61,2% no Python: só arredondamento) |
+| Revisão de uma folha | `revisada = true`, `revisar = []` |
+| Imagem anotada | `imagem.php` redireciona (302) para a URL assinada; id inexistente dá 404 |
+| Trocar as áreas | Disciplinas regravadas nas questões; colunas do relatório mudam na hora |
+| Áreas sobrepostas | Recusadas com mensagem |
+| Filtros por ano e período | Funcionam; período vazio vai para o fim (`NULLS LAST`) |
+| Storage recusando o envio (chave errada) | Mensagem "O Supabase Storage recusou a operação (401)"; nenhuma folha gravada no banco |
+| Arquivos no disco depois das requisições | Nenhum: pasta temporária apagada, `armazenamento/` não é tocada |
+| `pytest worker/testes` | 18/18 |
+
+### Teste no projeto real (2026-10-11)
+
+Feito com o PHP sem Docker, lendo o `.env`, como o `iniciar.cmd` faz.
+
+| Teste | Resultado |
+|---|---|
+| Conexão pelo Session pooler (`aws-1-sa-east-1`) | OK |
+| Tabelas `provas`, `questoes`, `folhas` | RLS ligado, 0 políticas |
+| Buckets `folhas` e `anotadas` | Privados. Acesso sem assinatura: HTTP 400; com URL assinada: HTTP 200 |
+| Prova AMA: gabarito por foto + 20 fotos da 8A | 20/20 lidas, **63,1%** (igual ao teste local); folha de outro formato recusada |
+| Modelo antigo: gabarito digitado + PDF da 7A + 10 fotos da 7B | 12 + 10 lidas; 7A 61,3% (Linguagens 63,3%, Matemática 59,2%), 7B 61,5% (60,0%, 63,0%), iguais ao teste local |
+| Imagem anotada na revisão | Redireciona para a URL assinada e abre (JPEG, ~78 KB); id inexistente dá 404 |
+| Revisão de folha, troca de áreas, filtro por ano | OK |
+| Arquivos deixados no disco | Nenhum |
+
+Tempo: **20 fotos em ~21 s** (~1 s por folha: leitura + 2 envios ao Storage em
+São Paulo), contra ~9 s com o Storage local. O cadastro com foto do gabarito
+leva ~1,5 s.
+
+Ficaram no projeto as duas provas de teste ("TESTE Fase 2 – …", ids 1 e 2) e
+as imagens das suas 42 folhas no Storage.
+
+Espaço no Storage por folha AMA: cerca de **58 KB** (recorte) + **74 KB**
+(anotada). No plano Free (1 GB), cabem umas **7 mil folhas**. No modelo antigo
+são ~130 + ~140 KB.
+
+### Mudanças fora do previsto
+
+- **Imagem anotada em JPEG.** Em PNG ela tinha ~600 KB por folha, e o Storage
+  gratuito encheria com ~1.500 folhas. O `omr_cli.py --debug` agora grava
+  `.jpg` (qualidade 80).
+- **O Python mudou um pouco**, ao contrário do previsto: com `--debug`, o
+  `omr_cli.py` também grava o recorte limpo da área de respostas
+  (`imagem_recorte`), que é o que vai para o bucket `folhas`. O `omr.py` não mudou.
+- **Recorte pela região das bolinhas** (`recortar_bolinhas()` no `omr_cli.py`),
+  nas duas imagens. No modelo antigo, a área dentro da moldura incluía nome
+  completo, data de nascimento e assinatura; agora nenhum dos dois modelos
+  guarda dados pessoais.
+- **Prepared statements emulados no PDO** (`ATTR_EMULATE_PREPARES`). Os poolers
+  do Supabase podem trocar a conexão entre as requisições; preparar no PHP
+  funciona com o Session e com o Transaction pooler.
+- **Chave secret no cabeçalho `apikey`**, como manda a documentação atual do
+  Supabase para as chaves novas (`sb_secret_...`). Se for usada a chave antiga
+  (JWT `service_role`), ela vai também no `Authorization: Bearer`.
+- **Cadastro sem rascunho no banco:** antes, a prova era gravada e apagada se o
+  gabarito falhasse. Agora o gabarito é lido primeiro e a prova e as questões
+  são gravadas juntas, numa transação.
+- **Certificados no Windows:** o PHP do winget não traz a lista de
+  certificados, e o `curl` recusava o HTTPS do Supabase. No Windows, o
+  `storage()` usa o repositório de certificados do próprio sistema
+  (`CURLSSLOPT_NATIVE_CA`); a verificação continua ligada. No Docker não muda nada.
+- **Áreas sem sobreposição:** como cada questão guarda uma disciplina só,
+  `ler_areas()` recusa áreas que usam as mesmas questões.
+
+### Pendências e riscos
+
+- **Senha do banco exposta na conversa com o assistente.** Trocar em Project
+  Settings → Database → Reset database password e atualizar o `.env`.
+- **Provas de teste no projeto real** (ids 1 e 2). Apagar antes do piloto,
+  junto com as imagens no Storage (o `on delete cascade` apaga as linhas, mas
+  não os arquivos dos buckets).
+- **Docker não foi testado nesta máquina** (o Docker não está instalado). O
+  `Dockerfile` ganhou só `libpq-dev` + `docker-php-ext-install pdo_pgsql`.
+- **Latência:** ~1 s por folha no projeto real. Uma turma de 40 fica perto de
+  40 s numa requisição só; se incomodar, os envios podem ser feitos em paralelo
+  (`curl_multi`) ou ir para a fila da versão com RabbitMQ.
+- **DER no Visual Paradigm**, se o orientador pedir: o esquema está na migração.
+
+### Diário
+
+- **2026-10-11** — `supabase init` e migração do esquema inicial (com os
+  buckets). Testada num PostgreSQL local.
+- **2026-10-11** — `lib.php` passa a usar a `DATABASE_URL`, o Storage via `curl`
+  e uma pasta temporária por requisição. `index.php`, `prova.php`, `folha.php`
+  e `imagem.php` adaptados.
+- **2026-10-11** — Projeto `xcmyknrojawmolnffltf` criado, `supabase link` e
+  `db push` feitos pelo Thiago; migração aplicada no projeto real.
+- **2026-10-11** — Fluxo testado de ponta a ponta (AMA e modelo antigo) contra o
+  PostgreSQL local e o Storage simulado; números iguais aos do leitor direto.
+  Imagem anotada trocada de PNG para JPEG. Dockerfile, `docker-compose.yml`,
+  `.env.exemplo`, `iniciar.cmd` e README atualizados.
+- **2026-10-11** — `.env` completo (senha e chave secret preenchidas pelo
+  Thiago, sem os marcadores `[ ]` e `< >` dos exemplos). Conexão, RLS e buckets
+  conferidos. Corrigida a verificação de certificado do `curl` no Windows.
+  Fluxo completo testado no projeto real: mesmos números do teste local.

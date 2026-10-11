@@ -5,7 +5,6 @@ require __DIR__ . '/lib.php';
 $erro = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $provaId = null;
     try {
         $nome = trim($_POST['nome'] ?? '');
         $questoes = (int)($_POST['questoes'] ?? 0);
@@ -39,11 +38,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'areas' => ler_areas($_POST['areas'] ?? '', $questoes),
         ];
 
-        db()->prepare('INSERT INTO provas (nome, layout, gabarito, ano, periodo) VALUES (?, ?, ?, ?, ?)')
-            ->execute([$nome, '{}', '[]', $ano, $periodo]);
-        $provaId = (int)db()->lastInsertId();
-        salvar_layout($provaId, $layout);
-
         $digitado = preg_replace('/[^A-Z]/', '', strtoupper($_POST['gabarito_digitado'] ?? ''));
         $imagem = upload_normalizado($_FILES['gabarito_imagem'] ?? []);
 
@@ -57,9 +51,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 throw new InvalidArgumentException('O gabarito usa alternativas que não existem: ' . implode(', ', array_unique($invalidas)));
             }
         } elseif ($imagem) {
-            $pasta = ARMAZENAMENTO . "/provas/$provaId";
-            $arquivo = guardar_upload($imagem[0], $pasta);
-            $leitura = ler_folhas([$arquivo], caminho_layout($provaId), "$pasta/debug")[0];
+            // A foto do gabarito só é lida; não fica guardada.
+            $leitura = ler_folhas([guardar_upload($imagem[0])], $layout)[0];
             if (!$leitura['ok']) {
                 throw new RuntimeException('Não foi possível ler o gabarito: ' . $leitura['erro']);
             }
@@ -80,17 +73,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!empty($leitura['caderno'])) {
                 $layout['caderno'] = $leitura['caderno'];
             }
-            salvar_layout($provaId, $layout);
         } else {
             throw new InvalidArgumentException('Envie a imagem do gabarito ou digite as respostas.');
         }
 
-        db()->prepare('UPDATE provas SET gabarito = ? WHERE id = ?')->execute([json_encode($gabarito), $provaId]);
+        $provaId = criar_prova($nome, $ano, $periodo, $layout, $gabarito);
         redirecionar("prova.php?id=$provaId");
     } catch (Throwable $ex) {
-        if ($provaId) {
-            db()->prepare('DELETE FROM provas WHERE id = ?')->execute([$provaId]);
-        }
         $erro = $ex->getMessage();
     }
 }
@@ -104,7 +93,7 @@ $st = db()->prepare("
            COUNT(DISTINCT f.turma) AS turmas
     FROM provas p LEFT JOIN folhas f ON f.prova_id = p.id AND f.erro IS NULL
     WHERE $where
-    GROUP BY p.id ORDER BY p.ano DESC, p.periodo DESC, p.id DESC
+    GROUP BY p.id ORDER BY p.ano DESC, p.periodo DESC NULLS LAST, p.id DESC
 ");
 $st->execute($params);
 $provas = $st->fetchAll();

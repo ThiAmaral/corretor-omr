@@ -11,12 +11,18 @@ identifica o aluno: a turma é informada no momento do envio das folhas.
 ```
 web/        Backend + telas em PHP (cadastro da prova, envio, relatórios, revisão)
 worker/     Leitor óptico em Python/OpenCV (só lê a folha; não conhece o banco)
+supabase/   Migrações do banco (PostgreSQL no Supabase), aplicadas com a Supabase CLI
 ferramentas/ Gerador de folhas de teste e validador de precisão
 exemplos/   Gabarito real, layouts e folhas fictícias das turmas 7A e 7B;
             em exemplos/ama, a folha AMA em branco e fotos geradas a partir dela
 ```
 
 O andamento do plano de evolução fica em [PROGRESSO.md](PROGRESSO.md).
+
+Os dados ficam no **Supabase**: provas, questões e folhas no PostgreSQL, e as
+imagens (só a área de respostas recortada e a imagem anotada pelo leitor) no
+Supabase Storage, em buckets privados. A foto enviada não é guardada; o nome
+escrito à mão no cabeçalho nunca sai do servidor.
 
 A divisão já segue a arquitetura combinada: o PHP é dono do banco e da regra
 de correção; o Python só devolve "qual bolinha foi marcada". Hoje o PHP chama o
@@ -48,7 +54,21 @@ cd corretor-omr
 Como o repositório é privado, na primeira vez o Git abre uma janela para entrar
 na conta do GitHub. A conta precisa ter sido convidada como colaboradora.
 
-### 3. Rodar
+### 3. Configurar o Supabase (uma vez)
+
+1. Crie o projeto no Supabase seguindo a etapa 2.1 do
+   [PLANO_DE_FASES.md](PLANO_DE_FASES.md#21-criar-o-projeto-no-supabase-passo-a-passo).
+2. Copie o `.env.exemplo` para `.env` e preencha a `DATABASE_URL` (Session
+   pooler), a `SUPABASE_URL` e a `SUPABASE_SECRET_KEY`. O `.env` não vai para o git.
+3. Crie as tabelas e os buckets aplicando as migrações (precisa do Node.js):
+
+   ```bash
+   npx supabase login
+   npx supabase link --project-ref <id-do-projeto>
+   npx supabase db push
+   ```
+
+### 4. Rodar
 
 ```bash
 docker compose up --build
@@ -64,21 +84,24 @@ parar de rolar, abra http://localhost:8080.
 | Parar o sistema                      | `Ctrl+C` no terminal, ou `docker compose down`    |
 | Ligar de novo                        | `docker compose up`                              |
 | Atualizar para a versão do GitHub    | `git pull` e depois `docker compose up --build`  |
-| Apagar todas as provas e folhas      | `docker compose down -v` (não tem volta)          |
+| Mudar o banco                        | `npx supabase migration new <nome>`, escrever o SQL e `npx supabase db push` |
 
-As provas e folhas enviadas ficam num volume do Docker (`dados`), separado do
-código: sobrevivem a `down`, `up` e `git pull`. Só o `-v` apaga.
+Os dados ficam no Supabase, e não no container: sobrevivem a `down`, `up` e
+`git pull`. No plano Free, o projeto é pausado depois de 7 dias sem uso; antes
+de uma apresentação, entre no painel e confirme que ele está ativo.
 
 ## Rodar sem Docker
 
-Requisitos: PHP 8.1+ com `pdo_sqlite`, Python 3.10+ e `poppler-utils` (para PDF).
+Requisitos: PHP 8.1+ com `pdo_pgsql`, `curl` e `openssl`, Python 3.10+ e
+`poppler-utils` (para PDF). O `.env` é o mesmo do Docker.
+
+No Windows, dois cliques no `iniciar.cmd`: ele liga as extensões do PHP na
+linha de comando, sem mexer no `php.ini`. Em outros sistemas:
 
 ```bash
 pip install -r worker/requirements.txt
 php -S localhost:8000 -t web
 ```
-
-Os dados ficam em `armazenamento/` (banco SQLite, uploads e imagens anotadas).
 
 ## Ano letivo e filtros
 
@@ -198,7 +221,10 @@ python -m pytest worker/testes -q
 - As folhas de teste são simulações. Antes de usar com a escola, rode o
   validador com fotos reais de folhas AMA preenchidas e ajuste `LIMIAR_MARCADA`
   e `ZONA_DUVIDA` em `worker/omr.py` se necessário.
-- Sem autenticação nem proteção CSRF: é um protótipo para uso local.
+- Sem autenticação nem proteção CSRF: é um protótipo para uso local. O login
+  com Supabase Auth chega na Fase 6.
+- As áreas da prova não podem mais se sobrepor (cada questão guarda uma
+  disciplina só, na tabela `questoes`).
 - No modelo impresso atual, a 4ª bolinha das questões 15, 17 e 19 está rotulada
   como "A". A leitura é por posição, então não afeta a correção, mas vale
   corrigir o arquivo da folha.

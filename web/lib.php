@@ -3,18 +3,46 @@ declare(strict_types=1);
 
 /*
  * Núcleo do backend PHP.
- * - Guarda provas e folhas em SQLite (troque o DSN por MySQL/PostgreSQL depois).
+ * - Guarda provas, questões e folhas no PostgreSQL do Supabase (DATABASE_URL).
+ *   O esquema vem das migrações em supabase/migrations.
+ * - Guarda as imagens no Supabase Storage (buckets privados "folhas" e "anotadas").
  * - Chama o leitor óptico em Python (worker/omr_cli.py). Na versão final essa
  *   chamada vira uma mensagem no RabbitMQ; o formato do JSON continua o mesmo.
  * - Faz a correção: o Python só lê, quem compara com o gabarito é o PHP.
  */
 
 define('RAIZ', dirname(__DIR__));
-define('ARMAZENAMENTO', getenv('ARMAZENAMENTO') ?: RAIZ . '/armazenamento');
+carregar_env(RAIZ . '/.env');
 define('PYTHON', getenv('OMR_PYTHON') ?: 'python3');
 define('OMR_CLI', RAIZ . '/worker/omr_cli.py');
 define('LIMITE_REFORCO', (float)(getenv('LIMITE_REFORCO') ?: 60)); // % de acerto
 define('PERIODO_ESCOLA', getenv('PERIODO_ESCOLA') ?: 'bimestre'); // bimestre, trimestre ou semestre
+
+/** Lê o .env da raiz quando o sistema roda sem Docker. Variáveis já definidas no ambiente têm prioridade. */
+function carregar_env(string $arquivo): void
+{
+    if (!is_file($arquivo)) {
+        return;
+    }
+    foreach (file($arquivo, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $linha) {
+        if (str_starts_with(ltrim($linha), '#') || !str_contains($linha, '=')) {
+            continue;
+        }
+        [$nome, $valor] = array_map('trim', explode('=', $linha, 2));
+        if (getenv($nome) === false) {
+            putenv("$nome=" . trim($valor, "\"'"));
+        }
+    }
+}
+
+function config(string $nome): string
+{
+    $valor = getenv($nome);
+    if ($valor === false || $valor === '') {
+        throw new RuntimeException("Configure $nome no arquivo .env (veja o .env.exemplo).");
+    }
+    return $valor;
+}
 
 function db(): PDO
 {
@@ -22,48 +50,114 @@ function db(): PDO
     if ($pdo) {
         return $pdo;
     }
-    if (!is_dir(ARMAZENAMENTO)) {
-        mkdir(ARMAZENAMENTO, 0775, true);
+    // postgresql://usuario:senha@host:porta/banco?sslmode=require
+    $url = parse_url(config('DATABASE_URL'));
+    if (!$url || !isset($url['host'], $url['user'])) {
+        throw new RuntimeException('DATABASE_URL inválida. Copie a string do "Session pooler" no painel do Supabase.');
     }
-    $pdo = new PDO('sqlite:' . ARMAZENAMENTO . '/corretor.db');
-    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-    $pdo->exec('PRAGMA foreign_keys = ON');
-    $pdo->exec("
-        CREATE TABLE IF NOT EXISTS provas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome TEXT NOT NULL,
-            layout TEXT NOT NULL,
-            gabarito TEXT NOT NULL,
-            ano INTEGER,
-            periodo INTEGER,
-            criado_em TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS folhas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            prova_id INTEGER NOT NULL REFERENCES provas(id) ON DELETE CASCADE,
-            turma TEXT NOT NULL,
-            arquivo TEXT NOT NULL,
-            pagina INTEGER NOT NULL,
-            respostas TEXT,
-            niveis TEXT,
-            revisar TEXT NOT NULL DEFAULT '[]',
-            revisada INTEGER NOT NULL DEFAULT 0,
-            erro TEXT,
-            imagem_debug TEXT,
-            criado_em TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-    ");
-    // Bancos criados antes do ano letivo: provas antigas ficam no ano em que foram cadastradas.
-    $colunas = array_column($pdo->query('PRAGMA table_info(provas)')->fetchAll(), 'name');
-    if (!in_array('ano', $colunas, true)) {
-        $pdo->exec('ALTER TABLE provas ADD COLUMN ano INTEGER');
-        $pdo->exec("UPDATE provas SET ano = CAST(strftime('%Y', criado_em) AS INTEGER)");
-    }
-    if (!in_array('periodo', $colunas, true)) {
-        $pdo->exec('ALTER TABLE provas ADD COLUMN periodo INTEGER');
-    }
+    parse_str($url['query'] ?? '', $opcoes);
+    $dsn = sprintf('pgsql:host=%s;port=%d;dbname=%s;sslmode=%s',
+        $url['host'], $url['port'] ?? 5432, ltrim($url['path'] ?? '/postgres', '/') ?: 'postgres',
+        $opcoes['sslmode'] ?? 'require');
+    $pdo = new PDO($dsn, urldecode($url['user']), urldecode($url['pass'] ?? ''), [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        // Os poolers do Supabase podem entregar outra conexão a cada requisição, e o
+        // "prepared statement" do servidor se perde. Preparar no PHP funciona com todos.
+        PDO::ATTR_EMULATE_PREPARES => true,
+    ]);
     return $pdo;
+}
+
+/* ------------------------------------------------------ Supabase Storage */
+
+/** Chamada à API do Storage com a chave secret (só no servidor). Devolve o JSON da resposta. */
+function storage(string $metodo, string $rota, string $corpo = '', string $tipo = 'application/json'): array
+{
+    $chave = config('SUPABASE_SECRET_KEY');
+    $cabecalhos = ["apikey: $chave", "Content-Type: $tipo", 'x-upsert: true'];
+    if (str_starts_with($chave, 'eyJ')) { // chave antiga (service_role, JWT)
+        $cabecalhos[] = "Authorization: Bearer $chave";
+    }
+    $ch = curl_init(rtrim(config('SUPABASE_URL'), '/') . '/storage/v1/' . $rota);
+    curl_setopt_array($ch, [
+        CURLOPT_CUSTOMREQUEST => $metodo,
+        CURLOPT_POSTFIELDS => $corpo,
+        CURLOPT_HTTPHEADER => $cabecalhos,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 60,
+    ]);
+    if (PHP_OS_FAMILY === 'Windows' && !ini_get('curl.cainfo')) {
+        // O PHP do winget não traz lista de certificados: usa a do próprio Windows.
+        curl_setopt($ch, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+    }
+    $resposta = curl_exec($ch);
+    $status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $falha = curl_error($ch);
+    curl_close($ch);
+    if ($resposta === false) {
+        throw new RuntimeException("Não foi possível acessar o Supabase Storage: $falha");
+    }
+    $dados = json_decode($resposta, true);
+    if ($status >= 300) {
+        $msg = is_array($dados) ? ($dados['message'] ?? $dados['error'] ?? $resposta) : $resposta;
+        throw new RuntimeException("O Supabase Storage recusou a operação ($status): $msg");
+    }
+    return is_array($dados) ? $dados : [];
+}
+
+function caminho_storage(string $caminho): string
+{
+    return implode('/', array_map('rawurlencode', explode('/', $caminho)));
+}
+
+/** Envia uma imagem JPEG local para o bucket e devolve o caminho guardado no banco. */
+function storage_enviar(string $bucket, string $caminho, string $arquivoLocal): string
+{
+    storage('POST', "object/$bucket/" . caminho_storage($caminho), file_get_contents($arquivoLocal), 'image/jpeg');
+    return $caminho;
+}
+
+/** URL temporária (padrão: 5 minutos) para o navegador abrir uma imagem de bucket privado. */
+function storage_url_assinada(string $bucket, string $caminho, int $segundos = 300): string
+{
+    $dados = storage('POST', "object/sign/$bucket/" . caminho_storage($caminho), json_encode(['expiresIn' => $segundos]));
+    return rtrim(config('SUPABASE_URL'), '/') . '/storage/v1' . $dados['signedURL'];
+}
+
+function storage_apagar(string $bucket, array $caminhos): void
+{
+    if ($caminhos) {
+        storage('DELETE', "object/$bucket", json_encode(['prefixes' => array_values($caminhos)]));
+    }
+}
+
+/* ------------------------------------------------- Arquivos temporários */
+
+/** Pasta temporária da requisição; o Python lê dela e ela é apagada no fim. Nada fica no disco. */
+function pasta_temporaria(): string
+{
+    static $pasta = null;
+    if ($pasta === null) {
+        $pasta = sys_get_temp_dir() . '/corretor_' . bin2hex(random_bytes(6));
+        mkdir($pasta, 0700, true);
+        register_shutdown_function(fn() => apagar_pasta($pasta));
+    }
+    return $pasta;
+}
+
+function apagar_pasta(string $pasta): void
+{
+    if (!is_dir($pasta)) {
+        return;
+    }
+    foreach (scandir($pasta) as $item) {
+        if ($item !== '.' && $item !== '..') {
+            $c = "$pasta/$item";
+            is_dir($c) ? apagar_pasta($c) : unlink($c);
+        }
+    }
+    rmdir($pasta);
 }
 
 function e(?string $s): string
@@ -176,6 +270,11 @@ function ler_areas(string $texto, int $questoes): array
         if ($de < 1 || $ate > $questoes || $de > $ate) {
             throw new InvalidArgumentException("A área \"{$m[1]}\" precisa estar entre as questões 1 e $questoes.");
         }
+        foreach ($areas as $outra) {
+            if ($de <= $outra['ate'] && $ate >= $outra['de']) {
+                throw new InvalidArgumentException("As áreas \"{$outra['nome']}\" e \"{$m[1]}\" usam as mesmas questões. Cada questão fica em uma área só.");
+            }
+        }
         $areas[] = ['nome' => $m[1], 'de' => $de, 'ate' => $ate];
     }
     return $areas;
@@ -192,31 +291,79 @@ function areas_efetivas(array $layout): array
     return $layout['areas'] ?: [['nome' => 'Geral', 'de' => 1, 'ate' => $layout['questoes']]];
 }
 
-function caminho_layout(int $provaId): string
+/** Cada questão guarda a sua disciplina; as faixas "Nome: de-até" são remontadas a partir delas. */
+function areas_das_questoes(array $questoes): array
 {
-    return ARMAZENAMENTO . "/provas/$provaId/layout.json";
+    $areas = [];
+    foreach ($questoes as $q) {
+        $ultima = array_key_last($areas);
+        if ($q['disciplina'] === null) {
+            continue;
+        }
+        if ($ultima !== null && $areas[$ultima]['nome'] === $q['disciplina'] && $areas[$ultima]['ate'] === $q['numero'] - 1) {
+            $areas[$ultima]['ate'] = $q['numero'];
+        } else {
+            $areas[] = ['nome' => $q['disciplina'], 'de' => $q['numero'], 'ate' => $q['numero']];
+        }
+    }
+    return $areas;
 }
 
-function salvar_layout(int $provaId, array $layout): void
+function salvar_areas(int $provaId, array $areas): void
 {
-    $dir = dirname(caminho_layout($provaId));
-    if (!is_dir($dir)) {
-        mkdir($dir, 0775, true);
+    $pdo = db();
+    $pdo->beginTransaction();
+    $pdo->prepare('UPDATE questoes SET disciplina = NULL WHERE prova_id = ?')->execute([$provaId]);
+    $st = $pdo->prepare('UPDATE questoes SET disciplina = ? WHERE prova_id = ? AND numero BETWEEN ? AND ?');
+    foreach ($areas as $a) {
+        $st->execute([$a['nome'], $provaId, $a['de'], $a['ate']]);
     }
-    file_put_contents(caminho_layout($provaId), json_encode($layout, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-    db()->prepare('UPDATE provas SET layout = ? WHERE id = ?')
-        ->execute([json_encode($layout, JSON_UNESCAPED_UNICODE), $provaId]);
+    $pdo->commit();
+}
+
+/** O banco guarda no layout só o que o leitor precisa; o nome e as áreas ficam em provas e questoes. */
+function layout_do_leitor(array $layout): array
+{
+    return array_diff_key($layout, ['nome' => 1, 'areas' => 1]);
+}
+
+/** Grava a prova e o gabarito (uma linha por questão) de uma vez só. Devolve o id. */
+function criar_prova(string $nome, int $ano, int $periodo, array $layout, array $gabarito): int
+{
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $st = $pdo->prepare("INSERT INTO provas (nome, ano, periodo, caderno, layout, status)
+                             VALUES (?, ?, ?, ?, ?, 'ativa') RETURNING id");
+        $st->execute([$nome, $ano, $periodo, $layout['caderno'] ?? null,
+            json_encode(layout_do_leitor($layout), JSON_UNESCAPED_UNICODE)]);
+        $id = (int)$st->fetchColumn();
+        $ins = $pdo->prepare('INSERT INTO questoes (prova_id, numero, resposta, disciplina) VALUES (?, ?, ?, ?)');
+        foreach ($gabarito as $i => $resposta) {
+            $n = $i + 1;
+            $area = array_values(array_filter($layout['areas'] ?? [], fn($a) => $n >= $a['de'] && $n <= $a['ate']));
+            $ins->execute([$id, $n, $resposta, $area[0]['nome'] ?? null]);
+        }
+        $pdo->commit();
+        return $id;
+    } catch (Throwable $ex) {
+        $pdo->rollBack();
+        throw $ex;
+    }
 }
 
 /* ------------------------------------------------------- Leitor óptico */
 
 /**
  * Chama o worker Python e devolve uma entrada por página lida:
- * ['arquivo', 'pagina', 'ok', 'erro'?, 'respostas'?, 'duvidosas'?, 'imagem_debug'?,
+ * ['arquivo', 'pagina', 'ok', 'erro'?, 'respostas'?, 'duvidosas'?, 'imagem_debug'?, 'imagem_recorte'?,
  *  'caderno'?, 'layout'?, 'confianca'?]
  */
-function ler_folhas(array $arquivos, string $layoutJson, string $pastaDebug): array
+function ler_folhas(array $arquivos, array $layout): array
 {
+    $layoutJson = tempnam(pasta_temporaria(), 'layout');
+    file_put_contents($layoutJson, json_encode(layout_do_leitor($layout), JSON_UNESCAPED_UNICODE));
+    $pastaDebug = pasta_temporaria() . '/lidas';
     $cmd = array_merge([PYTHON, OMR_CLI, 'ler'], $arquivos, ['--layout', $layoutJson, '--debug', $pastaDebug]);
     $proc = proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
     if (!is_resource($proc)) {
@@ -293,22 +440,16 @@ function upload_normalizado(array $campo): array
     return $arquivos;
 }
 
-function guardar_upload(array $arq, string $pasta): string
+/** Move o upload para a pasta temporária da requisição (o nome original fica legível para o Python). */
+function guardar_upload(array $arq): string
 {
-    if (!is_dir($pasta)) {
-        mkdir($pasta, 0775, true);
-    }
+    $pasta = pasta_temporaria();
     $base = preg_replace('/[^A-Za-z0-9_.-]+/', '_', pathinfo($arq['nome'], PATHINFO_FILENAME));
     $destino = $pasta . '/' . bin2hex(random_bytes(4)) . '_' . $base . '.' . $arq['ext'];
     if (!move_uploaded_file($arq['tmp'], $destino)) {
         throw new RuntimeException("Não foi possível salvar \"{$arq['nome']}\".");
     }
     return $destino;
-}
-
-function relativo(string $caminho): string
-{
-    return ltrim(substr($caminho, strlen(ARMAZENAMENTO)), '/');
 }
 
 function buscar_prova(int $id): array
@@ -320,8 +461,12 @@ function buscar_prova(int $id): array
         http_response_code(404);
         exit('Prova não encontrada.');
     }
-    $prova['layout'] = json_decode($prova['layout'], true);
-    $prova['gabarito'] = json_decode($prova['gabarito'], true);
+    $st = db()->prepare('SELECT numero, resposta, disciplina, dificuldade FROM questoes WHERE prova_id = ? ORDER BY numero');
+    $st->execute([$id]);
+    $questoes = $st->fetchAll();
+    $prova['layout'] = json_decode($prova['layout'], true) + ['nome' => $prova['nome']];
+    $prova['layout']['areas'] = areas_das_questoes($questoes);
+    $prova['gabarito'] = array_column($questoes, 'resposta');
     return $prova;
 }
 

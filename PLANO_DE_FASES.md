@@ -243,6 +243,9 @@ iguais.
 
 ## Fase 2: banco de dados no Supabase
 
+> **Situação (2026-10-11):** concluída. Projeto criado, migração aplicada e
+> fluxo completo testado no Supabase real. Só falta testar o Docker. Detalhes em [PROGRESSO.md](PROGRESSO.md#fase-2-banco-de-dados-no-supabase).
+
 **Objetivo:** trocar o SQLite pelo PostgreSQL do Supabase e guardar as imagens
 no Supabase Storage, sem mudar nada do que o professor vê.
 
@@ -390,7 +393,8 @@ git.
   | `respostas`, `niveis`, `layout` | Texto com JSON | `jsonb`; o `json_encode` e o `json_decode` continuam iguais |
 
 - **Imagens no Storage:**
-  - Criar no painel dois *buckets* **privados**: `folhas` e `anotadas`.
+  - Dois *buckets* **privados**: `folhas` e `anotadas`. *(Feito: a própria
+    migração cria os dois; não é preciso criar no painel.)*
   - **Recorte:** guardar **só a área de respostas**, já recortada pelos
     marcadores na Fase 1. Assim o nome escrito à mão no cabeçalho nunca é
     armazenado. Isso protege os dados do aluno (LGPD) e economiza espaço.

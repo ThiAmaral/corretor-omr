@@ -16,8 +16,7 @@ if (isset($_GET['lidas'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         if (($_POST['acao'] ?? '') === 'areas') {
-            $layout['areas'] = ler_areas($_POST['areas'] ?? '', (int)$layout['questoes']);
-            salvar_layout($id, $layout);
+            salvar_areas($id, ler_areas($_POST['areas'] ?? '', count($gabarito)));
             redirecionar("prova.php?id=$id");
         }
 
@@ -29,35 +28,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$uploads) {
             throw new InvalidArgumentException('Selecione ao menos um arquivo.');
         }
-        $pasta = ARMAZENAMENTO . "/provas/$id";
         $caminhos = [];
         $nomeOriginal = [];
         foreach ($uploads as $u) {
-            $c = guardar_upload($u, "$pasta/folhas");
+            $c = guardar_upload($u);
             $caminhos[] = $c;
             $nomeOriginal[$c] = $u['nome'];
         }
 
-        $leituras = ler_folhas($caminhos, caminho_layout($id), "$pasta/debug");
-        $ins = db()->prepare('INSERT INTO folhas (prova_id, turma, arquivo, pagina, respostas, niveis, revisar, erro, imagem_debug)
-                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        // As fotos enviadas ficam só na pasta temporária. No Storage vão a área de
+        // respostas recortada (sem o nome do aluno) e a imagem anotada pelo leitor.
+        $leituras = ler_folhas($caminhos, $layout);
+        $ins = db()->prepare('INSERT INTO folhas (prova_id, turma, arquivo, pagina, imagem, imagem_debug, respostas, niveis, revisar, erro)
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $enviadas = ['folhas' => [], 'anotadas' => []];
         $ok = $falhas = 0;
-        foreach ($leituras as $l) {
-            $nome = $nomeOriginal[$l['arquivo']] ?? basename($l['arquivo']);
-            if ($l['ok']) {
-                $ok++;
-                $ins->execute([
-                    $id, $turma, $nome, $l['pagina'],
-                    json_encode(respostas_da_leitura($l)),
-                    json_encode(array_column($l['respostas'], 'niveis')),
-                    json_encode(questoes_para_revisar($l)),
-                    null,
-                    isset($l['imagem_debug']) ? relativo($l['imagem_debug']) : null,
-                ]);
-            } else {
-                $falhas++;
-                $ins->execute([$id, $turma, $nome, $l['pagina'], null, null, '[]', $l['erro'], null]);
+        try {
+            db()->beginTransaction();
+            foreach ($leituras as $l) {
+                $nome = $nomeOriginal[$l['arquivo']] ?? basename($l['arquivo']);
+                if ($l['ok']) {
+                    $ok++;
+                    $prefixo = "$id/" . bin2hex(random_bytes(8));
+                    $imagem = $imagemDebug = null;
+                    if (isset($l['imagem_recorte'])) {
+                        $imagem = $enviadas['folhas'][] = storage_enviar('folhas', "{$prefixo}_area.jpg", $l['imagem_recorte']);
+                    }
+                    if (isset($l['imagem_debug'])) {
+                        $imagemDebug = $enviadas['anotadas'][] = storage_enviar('anotadas', "{$prefixo}_anotada.jpg", $l['imagem_debug']);
+                    }
+                    $ins->execute([
+                        $id, $turma, $nome, $l['pagina'], $imagem, $imagemDebug,
+                        json_encode(respostas_da_leitura($l)),
+                        json_encode(array_column($l['respostas'], 'niveis')),
+                        json_encode(questoes_para_revisar($l)),
+                        null,
+                    ]);
+                } else {
+                    $falhas++;
+                    $ins->execute([$id, $turma, $nome, $l['pagina'], null, null, null, null, '[]', $l['erro']]);
+                }
             }
+            db()->commit();
+        } catch (Throwable $ex) {
+            if (db()->inTransaction()) {
+                db()->rollBack();
+            }
+            foreach ($enviadas as $bucket => $lista) {
+                try {
+                    storage_apagar($bucket, $lista);
+                } catch (Throwable) {
+                    // O erro original é o que importa para o professor.
+                }
+            }
+            throw $ex;
         }
         redirecionar("prova.php?id=$id&turma=" . urlencode($turma) . "&lidas=$ok&falhas=$falhas");
     } catch (Throwable $ex) {

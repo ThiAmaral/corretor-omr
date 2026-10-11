@@ -12,6 +12,13 @@ where php >nul 2>nul || (
     exit /b 1
 )
 
+if not exist ".env" (
+    echo Falta o arquivo .env com os dados do Supabase. Copie o .env.exemplo para .env e preencha.
+    pause
+    exit /b 1
+)
+
 echo Corretor de provas em http://localhost:8000  (Ctrl+C para parar)
 start "" http://localhost:8000
-php -S localhost:8000 -t web
+rem pdo_pgsql (banco), curl e openssl (Storage) vem com o PHP do winget, mas desligadas no php.ini.
+php -d extension=pdo_pgsql -d extension=curl -d extension=openssl -d upload_max_filesize=50M -d post_max_size=200M -d max_file_uploads=100 -S localhost:8000 -t web
