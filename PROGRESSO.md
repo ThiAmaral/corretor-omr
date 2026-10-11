@@ -13,7 +13,7 @@ Legenda: ✅ feito · 🔄 em andamento · ⏳ pendente · ⚠️ bloqueado / de
 | 0. Preparação | 🔄 | Git pronto; faltam as folhas AMA reais e o significado do QR |
 | 1. Leitor AMA com detecção do formato | ✅ (com fotos geradas) | Falta validar com fotos reais (depende da Fase 0) |
 | 2. Supabase | ✅ | Testado no projeto real (`xcmyknrojawmolnffltf`). Só o Docker não foi testado (não instalado nesta máquina) |
-| 3. Revisão do gabarito, áreas e dificuldade | ⏳ | |
+| 3. Revisão do gabarito, áreas e dificuldade | ✅ (teste local) | Testada num PostgreSQL local; falta aplicar a migração nova no projeto real e repetir o teste lá |
 | 4. Relatórios por dificuldade | ⏳ | |
 | 5. Fotos de celular | ⏳ | Parte já adiantada na Fase 1 (ver abaixo) |
 | 6. API e login | ⏳ | |
@@ -255,3 +255,82 @@ são ~130 + ~140 KB.
   Thiago, sem os marcadores `[ ]` e `< >` dos exemplos). Conexão, RLS e buckets
   conferidos. Corrigida a verificação de certificado do `curl` no Windows.
   Fluxo completo testado no projeto real: mesmos números do teste local.
+
+---
+
+## Fase 3: revisão do gabarito oficial, áreas e dificuldade
+
+Início e término da implementação: 2026-10-11.
+
+Testada como a Fase 2: PostgreSQL local (PGlite) com as duas migrações
+aplicadas e o Storage simulado, com o navegador e com `curl`. **A migração nova
+ainda não foi aplicada no projeto real** (ver pendências).
+
+### Itens
+
+| # | Item | Situação | Observação |
+|---|---|---|---|
+| 3.1 | Migração `20261011232850_revisao_do_gabarito.sql` | ✅ local · ⏳ projeto real | `provas.imagem_gabarito`, `questoes.duvidosa`, `questoes.resposta` pode ficar vazia no rascunho |
+| 3.2 | Cadastro novo em `index.php` | ✅ | Só ano, período e gabarito (foto **ou** digitado); nome opcional. Sem questões, colunas, numeração nem áreas. Grava `status = 'rascunho'` e abre a revisão |
+| 3.3 | Catálogo de disciplinas e `modelos_de_prova()` | ✅ | `disciplinas()` (8 disciplinas fixas). Caderno `…M0801` → Matemática, 8º ano, todas as questões preenchidas. `L` → Língua Portuguesa como **sugestão** (não confirmado). Caderno desconhecido: o professor escolhe |
+| 3.4 | Tela `gabarito.php` | ✅ | Imagem anotada do gabarito (`imagem.php?prova=`), formato detectado, nome sugerido editável, um cartão por questão: resposta (botões A–D), disciplina (lista), dificuldade (Fácil/Médio/Difícil), habilidade opcional |
+| 3.5 | Seleção de intervalo e faixa colorida | ✅ | `gabarito.js`: clique na primeira e na última questão (no cartão ou na faixa), aplica disciplina ou dificuldade; "Selecionar todas". Sem JavaScript, a tela funciona questão por questão |
+| 3.6 | Aprovação | ✅ | `rascunho` → `ativa`. Exige resposta e disciplina em todas as questões (dificuldade é opcional). Rascunho pode ser salvo incompleto ou descartado. `prova.php` de rascunho redireciona para a revisão |
+| 3.7 | Gabarito digitado | ✅ | Formato e caderno vêm da 1ª folha boa; folhas com outro número de questões, outro caderno ou alternativa inexistente são recusadas com o motivo |
+| 3.8 | `prova.php` | ✅ | Sai o `textarea` de áreas; entra o link "Editar gabarito e dificuldade" (mesma tela). Numa prova ativa, a revisão não deixa apagar resposta nem disciplina |
+| 3.9 | Testes PHP | ✅ | `php web/testes/regras.php`: 18 testes (correção, modelos de caderno, rascunho, aprovação, formato pela 1ª folha) |
+| 3.10 | Teste de ponta a ponta | ✅ local | Ver abaixo |
+
+### Resultados do teste local
+
+| Cenário | Resultado |
+|---|---|
+| M0801 só com a foto do gabarito | Caderno, blocos `[7, 7, 7, 5]` e nome "AMA – Matemática 8º ano (M0801)" sugeridos; 26 questões já com Matemática; gabarito lido igual ao esperado. Dificuldade marcada por intervalo (1–7 Fácil, 21–26 Difícil), habilidade D07, aprovada. 20 fotos da 8A: **63,1%**, igual à Fase 2; folha do modelo antigo recusada |
+| M0801 com o gabarito digitado | Rascunho sem formato; envio de folhas bloqueado antes da aprovação; aprovação recusada sem disciplina ("Falta a disciplina das questões 1 a 26"). Depois de aprovada: folha de 20 questões recusada ("Esta folha tem 20 questões, e o gabarito da prova tem 26"), a 1ª folha AMA definiu caderno `2265M0801` e blocos; **63,1%**; num 2º envio, folha de outro formato recusada |
+| Várias disciplinas (modelo antigo, sem QR) | Nenhuma disciplina pré-preenchida; 1–10 Língua Portuguesa e 20→11 Matemática (seleção ao contrário também funciona). Aprovação com 11–20 vazias recusada sem perder o que foi escolhido. 7A (PDF) **61,3%** (63,3% / 59,2%) e 7B **61,5%** (60,0% / 63,0%), iguais à Fase 2 |
+| Foto de gabarito com marcações fracas e branco (`8A_aluno02`) | Questões 12, 13, 18 e 24 em destaque; 12, 18 e 24 sem resposta (exigida na aprovação) |
+| Descartar rascunho | Linhas apagadas e imagem do gabarito removida do Storage |
+| Editar prova ativa | Trocar a resposta da questão 1 recalculou o relatório na hora (63,1% → 61,0%); apagar uma disciplina foi recusado |
+| Celular (375 px) | Sem rolagem horizontal; cartões em uma coluna; barra de seleção deixa de ser fixa |
+| `pytest worker/testes` | 18/18 |
+
+### Mudanças fora do previsto
+
+- **Rascunho só depois da leitura:** o plano dizia gravar o rascunho e depois
+  revisar; isso foi mantido, mas a foto é lida antes de gravar. Se a foto não
+  puder ser lida, nada é gravado e o professor recebe o motivo.
+- **Questão duvidosa no rascunho:** marcação fraca abaixo do limiar vem do
+  leitor como "em branco duvidosa", então fica sem resposta e em destaque.
+- **Imagem do gabarito** vai para o bucket `anotadas`, em `gabaritos/<aleatório>.jpg`.
+- **Erros de validação agrupados** ("Falta a disciplina das questões 1 a 26"),
+  em vez de uma linha por questão.
+- **Removidos** `ler_areas()`, `areas_texto()`, `salvar_areas()` e
+  `criar_prova()`, que só serviam ao formulário antigo.
+
+### Pendências e riscos
+
+- **Aplicar a migração no projeto real** (`npx supabase db push`) e repetir os
+  três cenários lá. Sem ela, o PHP novo falha no projeto real (colunas
+  `imagem_gabarito` e `duvidosa` não existem).
+- **Provas de teste da Fase 2** (ids 1 e 2 do projeto real) continuam com
+  `status = 'ativa'`; seguem funcionando, com as áreas antigas ("Linguagens")
+  aceitas na revisão.
+- **Letra do caderno para Língua Portuguesa** e o significado do resto do código
+  (pergunta em aberto da Fase 0). Até lá, só o `M` é confirmado.
+- **Dificuldade é opcional** na aprovação. Se a Fase 4 depender dela em todas as
+  questões, dá para exigir com uma linha em `validar_revisao()`.
+- **Confiança baixa da leitura do gabarito** (ex.: QR não lido) ainda não é
+  mostrada na revisão; aparece só como "caderno ausente" no formato.
+
+### Diário
+
+- **2026-10-11** — Fase iniciada. Conferido que o leitor detecta sozinho o
+  formato também do modelo antigo (blocos `[10, 10]`, 7B com 61,5%, igual ao
+  layout manual): o formulário de formato pode sair sem perder o modelo antigo.
+- **2026-10-11** — Migração nova; `lib.php` com catálogo de disciplinas,
+  modelos por caderno, rascunho, validação da revisão e formato pela 1ª folha.
+  `index.php` reescrito; `gabarito.php` + `gabarito.js` novos; `prova.php` e
+  `imagem.php` adaptados. Testes PHP (18).
+- **2026-10-11** — Teste de ponta a ponta local nos três cenários do "pronto
+  quando" e nos casos de borda. Ajustes: erros agrupados e barra de seleção não
+  fixa no celular.

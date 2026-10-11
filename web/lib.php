@@ -253,37 +253,95 @@ function aplicar_filtros(array $filtros, array $entrada): array
     return [implode(' AND ', $condicoes), $params, $escolhidos];
 }
 
-/* ---------------------------------------------------------------- Layout */
+/* ------------------------------------------- Disciplinas e dificuldade */
 
-/** "Linguagens: 1-10" por linha -> [['nome'=>..., 'de'=>1, 'ate'=>10], ...] */
-function ler_areas(string $texto, int $questoes): array
+/** Catálogo fixo: a disciplina de cada questão é escolhida desta lista, nunca digitada. */
+function disciplinas(): array
 {
-    $areas = [];
-    foreach (preg_split('/\R/u', trim($texto)) as $n => $linha) {
-        if (trim($linha) === '') {
-            continue;
-        }
-        if (!preg_match('/^\s*(.+?)\s*:\s*(\d+)\s*(?:-|–|a|até)\s*(\d+)\s*$/u', $linha, $m)) {
-            throw new InvalidArgumentException('Linha ' . ($n + 1) . ' das áreas não está no formato "Nome: 1-10".');
-        }
-        [$de, $ate] = [(int)$m[2], (int)$m[3]];
-        if ($de < 1 || $ate > $questoes || $de > $ate) {
-            throw new InvalidArgumentException("A área \"{$m[1]}\" precisa estar entre as questões 1 e $questoes.");
-        }
-        foreach ($areas as $outra) {
-            if ($de <= $outra['ate'] && $ate >= $outra['de']) {
-                throw new InvalidArgumentException("As áreas \"{$outra['nome']}\" e \"{$m[1]}\" usam as mesmas questões. Cada questão fica em uma área só.");
-            }
-        }
-        $areas[] = ['nome' => $m[1], 'de' => $de, 'ate' => $ate];
+    return ['Língua Portuguesa', 'Matemática', 'Ciências', 'História', 'Geografia',
+        'Língua Inglesa', 'Arte', 'Educação Física'];
+}
+
+/** Opções da lista de disciplinas: o catálogo e, se houver, nomes antigos já gravados na prova. */
+function disciplinas_da_prova(array $questoes): array
+{
+    $antigas = array_filter(array_column($questoes, 'disciplina'), fn($d) => $d !== null && $d !== '');
+    return array_values(array_unique(array_merge(disciplinas(), $antigas)));
+}
+
+const DIFICULDADES = ['facil' => 'Fácil', 'medio' => 'Médio', 'dificil' => 'Difícil'];
+
+/**
+ * Modelos de prova, reconhecidos pelo código do caderno lido no QR (ex.: 2265M0801).
+ * Num caderno de uma disciplina, todas as questões já recebem essa disciplina.
+ * Caderno desconhecido ou com todas as disciplinas: o professor informa na revisão.
+ * Para um modelo novo basta acrescentar uma entrada. O padrão captura o ano escolar.
+ */
+function modelos_de_prova(): array
+{
+    return [
+        'ama_matematica' => [
+            'rotulo' => 'AMA – Matemática',
+            'caderno' => '/^\d*M(\d{2})\d{2}$/',
+            'disciplina' => 'Matemática',
+        ],
+        // A letra L para Língua Portuguesa ainda não foi confirmada (pergunta em aberto do plano).
+        // Como é só uma sugestão que o professor confere na revisão, já fica cadastrada.
+        'ama_portugues' => [
+            'rotulo' => 'AMA – Língua Portuguesa',
+            'caderno' => '/^\d*L(\d{2})\d{2}$/',
+            'disciplina' => 'Língua Portuguesa',
+        ],
+    ];
+}
+
+/** ['chave', 'rotulo', 'disciplina', 'ano_escolar'] do modelo do caderno, ou null se for desconhecido. */
+function modelo_do_caderno(?string $caderno): ?array
+{
+    if ($caderno === null || $caderno === '') {
+        return null;
     }
-    return $areas;
+    foreach (modelos_de_prova() as $chave => $m) {
+        if (preg_match($m['caderno'], strtoupper($caderno), $partes)) {
+            return ['chave' => $chave, 'rotulo' => $m['rotulo'], 'disciplina' => $m['disciplina'],
+                'ano_escolar' => (int)$partes[1]];
+        }
+    }
+    return null;
 }
 
-function areas_texto(array $layout): string
+/** "AMA – Matemática 8º ano (M0801)"; sem modelo, um nome com a data que o professor pode trocar. */
+function sugerir_nome_prova(?string $caderno): string
 {
-    return implode("\n", array_map(fn($a) => "{$a['nome']}: {$a['de']}-{$a['ate']}", $layout['areas'] ?? []));
+    $modelo = modelo_do_caderno($caderno);
+    if ($modelo) {
+        $codigo = preg_replace('/^\d+(?=[A-Z])/', '', strtoupper($caderno));
+        return "{$modelo['rotulo']} {$modelo['ano_escolar']}º ano ($codigo)";
+    }
+    return $caderno ? "Prova do caderno $caderno" : 'Prova de ' . date('d/m/Y');
 }
+
+/** "Caderno 2265M0801 · 26 questões em 4 blocos (7, 7, 7, 5) · alternativas A–D" */
+function descrever_formato(array $layout, int $questoes): string
+{
+    $partes = [];
+    if (!empty($layout['caderno'])) {
+        $partes[] = 'Caderno ' . $layout['caderno'];
+    }
+    $blocos = $layout['blocos'] ?? null;
+    if (!$blocos && !empty($layout['colunas'])) {
+        $blocos = array_fill(0, (int)$layout['colunas'], intdiv($questoes, (int)$layout['colunas']));
+    }
+    $partes[] = "$questoes questões" . ($blocos && count($blocos) > 1
+            ? ' em ' . count($blocos) . ' blocos (' . implode(', ', $blocos) . ')' : '');
+    $alts = $layout['alternativas'] ?? [];
+    if ($alts) {
+        $partes[] = 'alternativas ' . reset($alts) . '–' . end($alts);
+    }
+    return implode(' · ', $partes);
+}
+
+/* ---------------------------------------------------------------- Layout */
 
 /** Sem áreas cadastradas, a prova inteira vira "Geral". */
 function areas_efetivas(array $layout): array
@@ -309,40 +367,69 @@ function areas_das_questoes(array $questoes): array
     return $areas;
 }
 
-function salvar_areas(int $provaId, array $areas): void
-{
-    $pdo = db();
-    $pdo->beginTransaction();
-    $pdo->prepare('UPDATE questoes SET disciplina = NULL WHERE prova_id = ?')->execute([$provaId]);
-    $st = $pdo->prepare('UPDATE questoes SET disciplina = ? WHERE prova_id = ? AND numero BETWEEN ? AND ?');
-    foreach ($areas as $a) {
-        $st->execute([$a['nome'], $provaId, $a['de'], $a['ate']]);
-    }
-    $pdo->commit();
-}
-
 /** O banco guarda no layout só o que o leitor precisa; o nome e as áreas ficam em provas e questoes. */
 function layout_do_leitor(array $layout): array
 {
     return array_diff_key($layout, ['nome' => 1, 'areas' => 1]);
 }
 
-/** Grava a prova e o gabarito (uma linha por questão) de uma vez só. Devolve o id. */
-function criar_prova(string $nome, int $ano, int $periodo, array $layout, array $gabarito): int
+/** O formato só é conhecido depois de uma foto (do gabarito ou da 1ª folha de aluno). */
+function formato_conhecido(array $layout): bool
 {
+    return !empty($layout['blocos']) || !empty($layout['colunas']);
+}
+
+/**
+ * Questões do rascunho a partir da leitura da foto do gabarito. Branco e marcação
+ * dupla ficam sem resposta e em destaque; marcação fraca fica com a letra e em destaque.
+ */
+function questoes_da_leitura(array $leitura, ?string $disciplina): array
+{
+    $questoes = [];
+    foreach ($leitura['respostas'] as $r) {
+        $questoes[] = [
+            'resposta' => $r['situacao'] === 'marcada' ? $r['resposta'] : null,
+            'duvidosa' => $r['duvidosa'] || $r['situacao'] !== 'marcada',
+            'disciplina' => $disciplina,
+        ];
+    }
+    return $questoes;
+}
+
+/** Questões do rascunho a partir do gabarito digitado (ex.: "CBDA..."). */
+function questoes_digitadas(string $texto): array
+{
+    $letras = str_split(preg_replace('/[^A-Z]/', '', strtoupper($texto)));
+    if ($letras === [''] || !$letras) {
+        throw new InvalidArgumentException('Digite as respostas do gabarito em ordem, por exemplo CBDAABCD.');
+    }
+    if (max($letras) > 'E') {
+        throw new InvalidArgumentException('O gabarito digitado só pode usar as letras A a E.');
+    }
+    return array_map(fn($l) => ['resposta' => $l, 'duvidosa' => false, 'disciplina' => null], $letras);
+}
+
+/** Alternativas de um gabarito digitado, até a folha ser lida: A–D, ou até a maior letra usada. */
+function alternativas_digitadas(array $questoes): array
+{
+    return range('A', max('D', ...array_column($questoes, 'resposta')));
+}
+
+/** Grava a prova como rascunho, com uma linha por questão. Devolve o id. */
+function criar_rascunho(string $nome, int $ano, int $periodo, array $layout, array $questoes, ?string $imagemGabarito): int
+{
+    $modelo = modelo_do_caderno($layout['caderno'] ?? null);
     $pdo = db();
     $pdo->beginTransaction();
     try {
-        $st = $pdo->prepare("INSERT INTO provas (nome, ano, periodo, caderno, layout, status)
-                             VALUES (?, ?, ?, ?, ?, 'ativa') RETURNING id");
-        $st->execute([$nome, $ano, $periodo, $layout['caderno'] ?? null,
-            json_encode(layout_do_leitor($layout), JSON_UNESCAPED_UNICODE)]);
+        $st = $pdo->prepare("INSERT INTO provas (nome, ano, periodo, caderno, modelo, layout, imagem_gabarito, status)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, 'rascunho') RETURNING id");
+        $st->execute([$nome, $ano, $periodo, $layout['caderno'] ?? null, $modelo['chave'] ?? null,
+            json_encode(layout_do_leitor($layout), JSON_UNESCAPED_UNICODE), $imagemGabarito]);
         $id = (int)$st->fetchColumn();
-        $ins = $pdo->prepare('INSERT INTO questoes (prova_id, numero, resposta, disciplina) VALUES (?, ?, ?, ?)');
-        foreach ($gabarito as $i => $resposta) {
-            $n = $i + 1;
-            $area = array_values(array_filter($layout['areas'] ?? [], fn($a) => $n >= $a['de'] && $n <= $a['ate']));
-            $ins->execute([$id, $n, $resposta, $area[0]['nome'] ?? null]);
+        $ins = $pdo->prepare('INSERT INTO questoes (prova_id, numero, resposta, disciplina, duvidosa) VALUES (?, ?, ?, ?, ?)');
+        foreach (array_values($questoes) as $i => $q) {
+            $ins->execute([$id, $i + 1, $q['resposta'], $q['disciplina'], $q['duvidosa'] ? 'true' : 'false']);
         }
         $pdo->commit();
         return $id;
@@ -352,19 +439,156 @@ function criar_prova(string $nome, int $ano, int $periodo, array $layout, array 
     }
 }
 
+/**
+ * Confere a revisão enviada pelo formulário e devolve [questões limpas, erros].
+ * Ao aprovar (ou ao salvar uma prova já ativa), toda questão precisa de resposta e disciplina.
+ */
+function validar_revisao(array $entrada, array $prova, bool $completa): array
+{
+    $alts = $prova['layout']['alternativas'];
+    $catalogo = disciplinas_da_prova($prova['questoes']);
+    $questoes = [];
+    $semResposta = $semDisciplina = $respostaInvalida = $disciplinaInvalida = [];
+    $erros = [];
+    foreach ($prova['questoes'] as $i => $atual) {
+        $n = $atual['numero'];
+        $q = (array)($entrada[$i] ?? []);
+        $resposta = strtoupper(trim((string)($q['resposta'] ?? '')));
+        $disciplina = trim((string)($q['disciplina'] ?? ''));
+        $dificuldade = (string)($q['dificuldade'] ?? '');
+        $habilidade = mb_substr(strtoupper(trim((string)($q['habilidade'] ?? ''))), 0, 20);
+        if ($resposta !== '' && !in_array($resposta, $alts, true)) {
+            $respostaInvalida[] = $n;
+            $resposta = '';
+        }
+        if ($disciplina !== '' && !in_array($disciplina, $catalogo, true)) {
+            $disciplinaInvalida[] = $n;
+            $disciplina = '';
+        }
+        if ($dificuldade !== '' && !isset(DIFICULDADES[$dificuldade])) {
+            $dificuldade = '';
+        }
+        if ($resposta === '') {
+            $semResposta[] = $n;
+        }
+        if ($disciplina === '') {
+            $semDisciplina[] = $n;
+        }
+        $questoes[] = [
+            'numero' => $n,
+            'resposta' => $resposta ?: null,
+            'disciplina' => $disciplina ?: null,
+            'dificuldade' => $dificuldade ?: null,
+            'habilidade' => $habilidade ?: null,
+            // A dúvida da leitura some quando o professor confere e salva com uma resposta.
+            'duvidosa' => $resposta === '',
+        ];
+    }
+    $das = fn(array $nums) => (count($nums) === 1 ? 'da questão ' : 'das questões ') . listar_numeros($nums);
+    if ($respostaInvalida) {
+        $erros[] = 'A resposta ' . $das($respostaInvalida) . ' precisa ser uma das alternativas (' . implode(', ', $alts) . ').';
+    }
+    if ($disciplinaInvalida) {
+        $erros[] = 'A disciplina ' . $das($disciplinaInvalida) . ' não está na lista.';
+    }
+    if ($completa && $semResposta) {
+        $erros[] = 'Falta a resposta ' . $das($semResposta) . '.';
+    }
+    if ($completa && $semDisciplina) {
+        $erros[] = 'Falta a disciplina ' . $das($semDisciplina) . '.';
+    }
+    return [$questoes, $erros];
+}
+
+/** [1, 2, 3, 5, 7, 8] -> "1 a 3, 5, 7 e 8" */
+function listar_numeros(array $numeros): string
+{
+    sort($numeros);
+    $faixas = [];
+    foreach ($numeros as $n) {
+        $ultima = array_key_last($faixas);
+        if ($ultima !== null && $faixas[$ultima][1] === $n - 1) {
+            $faixas[$ultima][1] = $n;
+        } else {
+            $faixas[] = [$n, $n];
+        }
+    }
+    $textos = array_map(fn($f) => $f[0] === $f[1] ? (string)$f[0]
+        : ($f[1] === $f[0] + 1 ? "{$f[0]}, {$f[1]}" : "{$f[0]} a {$f[1]}"), $faixas);
+    $ultimo = array_pop($textos);
+    return $textos ? implode(', ', $textos) . " e $ultimo" : $ultimo;
+}
+
+/** Grava a revisão do gabarito; com $aprovar, a prova passa a aceitar folhas. */
+function salvar_revisao(int $provaId, string $nome, array $questoes, bool $aprovar): void
+{
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('UPDATE provas SET nome = ?' . ($aprovar ? ", status = 'ativa'" : '') . ' WHERE id = ?')
+            ->execute([$nome, $provaId]);
+        $st = $pdo->prepare('UPDATE questoes SET resposta = ?, disciplina = ?, dificuldade = ?, habilidade = ?, duvidosa = ?
+                             WHERE prova_id = ? AND numero = ?');
+        foreach ($questoes as $q) {
+            $st->execute([$q['resposta'], $q['disciplina'], $q['dificuldade'], $q['habilidade'],
+                $q['duvidosa'] ? 'true' : 'false', $provaId, $q['numero']]);
+        }
+        $pdo->commit();
+    } catch (Throwable $ex) {
+        $pdo->rollBack();
+        throw $ex;
+    }
+}
+
+/**
+ * Gabarito digitado: a prova ainda não tem formato. A primeira folha lida define
+ * o formato e o caderno; as outras precisam ter o mesmo. Devolve o erro da folha,
+ * ou null se ela serve (e, se for a primeira, completa o $layout).
+ */
+function conferir_formato_da_folha(array &$layout, array $leitura, array $gabarito): ?string
+{
+    $detectado = $leitura['layout'];
+    $n = count($gabarito);
+    if ((int)$detectado['questoes'] !== $n) {
+        return "Esta folha tem {$detectado['questoes']} questões, e o gabarito da prova tem $n.";
+    }
+    $foraDaFolha = array_diff(array_filter($gabarito), $detectado['alternativas']);
+    if ($foraDaFolha) {
+        return 'O gabarito usa a alternativa ' . implode(', ', array_unique($foraDaFolha))
+            . ', que não existe nesta folha (' . implode(', ', $detectado['alternativas']) . ').';
+    }
+    if (formato_conhecido($layout)) {
+        $caderno = $layout['caderno'] ?? null;
+        if ($caderno && $leitura['caderno'] && $leitura['caderno'] !== $caderno) {
+            return "Esta folha é do caderno {$leitura['caderno']}, e a prova é do caderno $caderno.";
+        }
+        if ($detectado['blocos'] !== $layout['blocos'] || $detectado['alternativas'] !== $layout['alternativas']) {
+            return 'O formato desta folha (blocos ' . implode(', ', $detectado['blocos'])
+                . ') é diferente do das outras folhas da prova (' . implode(', ', $layout['blocos']) . ').';
+        }
+        return null;
+    }
+    $layout = ['caderno' => $leitura['caderno'] ?? null] + array_intersect_key($detectado, ['alternativas' => 1, 'blocos' => 1, 'questoes' => 1]) + $layout;
+    return null;
+}
+
 /* ------------------------------------------------------- Leitor óptico */
 
 /**
  * Chama o worker Python e devolve uma entrada por página lida:
  * ['arquivo', 'pagina', 'ok', 'erro'?, 'respostas'?, 'duvidosas'?, 'imagem_debug'?, 'imagem_recorte'?,
  *  'caderno'?, 'layout'?, 'confianca'?]
+ * Sem layout (ou com um layout ainda sem formato), o leitor detecta o formato de cada folha.
  */
-function ler_folhas(array $arquivos, array $layout): array
+function ler_folhas(array $arquivos, ?array $layout = null): array
 {
-    $layoutJson = tempnam(pasta_temporaria(), 'layout');
-    file_put_contents($layoutJson, json_encode(layout_do_leitor($layout), JSON_UNESCAPED_UNICODE));
     $pastaDebug = pasta_temporaria() . '/lidas';
-    $cmd = array_merge([PYTHON, OMR_CLI, 'ler'], $arquivos, ['--layout', $layoutJson, '--debug', $pastaDebug]);
+    $cmd = array_merge([PYTHON, OMR_CLI, 'ler'], $arquivos, ['--debug', $pastaDebug]);
+    if ($layout && formato_conhecido($layout)) {
+        $layoutJson = tempnam(pasta_temporaria(), 'layout');
+        file_put_contents($layoutJson, json_encode(layout_do_leitor($layout), JSON_UNESCAPED_UNICODE));
+        array_push($cmd, '--layout', $layoutJson);
+    }
     $proc = proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
     if (!is_resource($proc)) {
         throw new RuntimeException('Não foi possível iniciar o leitor óptico (Python).');
@@ -461,11 +685,17 @@ function buscar_prova(int $id): array
         http_response_code(404);
         exit('Prova não encontrada.');
     }
-    $st = db()->prepare('SELECT numero, resposta, disciplina, dificuldade FROM questoes WHERE prova_id = ? ORDER BY numero');
+    $st = db()->prepare('SELECT numero, resposta, disciplina, dificuldade, habilidade, duvidosa
+                         FROM questoes WHERE prova_id = ? ORDER BY numero');
     $st->execute([$id]);
     $questoes = $st->fetchAll();
-    $prova['layout'] = json_decode($prova['layout'], true) + ['nome' => $prova['nome']];
+    foreach ($questoes as &$q) {
+        $q['duvidosa'] = in_array($q['duvidosa'], [true, 't', 1, '1'], true);
+    }
+    unset($q);
+    $prova['layout'] = json_decode($prova['layout'], true) + ['nome' => $prova['nome'], 'questoes' => count($questoes)];
     $prova['layout']['areas'] = areas_das_questoes($questoes);
+    $prova['questoes'] = $questoes;
     $prova['gabarito'] = array_column($questoes, 'resposta');
     return $prova;
 }

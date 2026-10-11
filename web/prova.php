@@ -4,6 +4,10 @@ require __DIR__ . '/lib.php';
 
 $prova = buscar_prova((int)($_GET['id'] ?? 0));
 $id = (int)$prova['id'];
+if ($prova['status'] === 'rascunho') {
+    // Só prova com gabarito aprovado recebe folhas e tem relatório.
+    redirecionar("gabarito.php?id=$id");
+}
 $layout = $prova['layout'];
 $gabarito = $prova['gabarito'];
 $erro = null;
@@ -15,11 +19,6 @@ if (isset($_GET['lidas'])) {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
-        if (($_POST['acao'] ?? '') === 'areas') {
-            salvar_areas($id, ler_areas($_POST['areas'] ?? '', count($gabarito)));
-            redirecionar("prova.php?id=$id");
-        }
-
         $turma = trim($_POST['turma'] ?? '');
         if ($turma === '') {
             throw new InvalidArgumentException('Informe a turma das folhas enviadas.');
@@ -38,7 +37,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // As fotos enviadas ficam só na pasta temporária. No Storage vão a área de
         // respostas recortada (sem o nome do aluno) e a imagem anotada pelo leitor.
+        // Gabarito digitado: sem formato ainda, cada folha é lida com o formato
+        // detectado, e a primeira que servir define o formato e o caderno da prova.
+        $semFormato = !formato_conhecido($layout);
         $leituras = ler_folhas($caminhos, $layout);
+        if ($semFormato) {
+            foreach ($leituras as &$l) {
+                if ($l['ok'] && ($motivo = conferir_formato_da_folha($layout, $l, $gabarito)) !== null) {
+                    $l = ['ok' => false, 'erro' => $motivo] + $l;
+                }
+            }
+            unset($l);
+        }
         $ins = db()->prepare('INSERT INTO folhas (prova_id, turma, arquivo, pagina, imagem, imagem_debug, respostas, niveis, revisar, erro)
                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $enviadas = ['folhas' => [], 'anotadas' => []];
@@ -68,6 +78,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $falhas++;
                     $ins->execute([$id, $turma, $nome, $l['pagina'], null, null, null, null, '[]', $l['erro']]);
                 }
+            }
+            if ($semFormato && formato_conhecido($layout)) {
+                $modelo = modelo_do_caderno($layout['caderno'] ?? null);
+                db()->prepare('UPDATE provas SET layout = ?, caderno = ?, modelo = ? WHERE id = ?')
+                    ->execute([json_encode(layout_do_leitor($layout), JSON_UNESCAPED_UNICODE),
+                        $layout['caderno'] ?? null, $modelo['chave'] ?? null, $id]);
             }
             db()->commit();
         } catch (Throwable $ex) {
@@ -178,10 +194,14 @@ cabecalho($prova['nome'], 'index.php');
 ?>
 
 <p class="meta">
-  <?php if (!empty($layout['caderno'])): ?>Caderno <?= e($layout['caderno']) ?>. <?php endif; ?>
-  <?= (int)$layout['questoes'] ?> questões, alternativas <?= e(implode(', ', $layout['alternativas'])) ?>.
+  <?php if (formato_conhecido($layout)): ?>
+    <?= e(descrever_formato($layout, count($gabarito))) ?>.
+  <?php else: ?>
+    <?= count($gabarito) ?> questões. O formato da folha será reconhecido na primeira folha enviada.
+  <?php endif; ?>
   Gabarito: <span class="gabarito"><?= e(implode('', $gabarito)) ?></span>.
   Reforço indicado abaixo de <?= fmt_pct(LIMITE_REFORCO) ?> de acerto.
+  <a href="gabarito.php?id=<?= $id ?>">Editar gabarito e dificuldade</a>
 </p>
 
 <?php if ($aviso): ?><p class="aviso"><?= e($aviso) ?></p><?php endif; ?>
@@ -283,15 +303,5 @@ cabecalho($prova['nome'], 'index.php');
   </table>
 </section>
 <?php endif; ?>
-
-<section>
-  <h2>Áreas da prova</h2>
-  <p class="dica">Alterar as áreas recalcula todos os relatórios na hora; as folhas não precisam ser enviadas de novo.</p>
-  <form method="post" class="formulario">
-    <input type="hidden" name="acao" value="areas">
-    <textarea name="areas" rows="3" placeholder="Matemática: 1-20"><?= e(areas_texto($layout)) ?></textarea>
-    <button type="submit">Salvar áreas</button>
-  </form>
-</section>
 
 <?php rodape();

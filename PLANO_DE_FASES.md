@@ -415,6 +415,10 @@ revisar folha) funciona igual, com os dados no Supabase e nenhum arquivo em
 
 ## Fase 3: revisão do gabarito oficial, áreas e dificuldade
 
+> **Situação (2026-10-11):** implementada e testada num PostgreSQL local nos três
+> cenários do "pronto quando". Falta aplicar a migração nova no projeto real e
+> repetir o teste lá. Detalhes em [PROGRESSO.md](PROGRESSO.md#fase-3-revisão-do-gabarito-oficial-áreas-e-dificuldade).
+
 **Objetivo:** o professor envia a foto do gabarito, confere o que foi lido,
 ajusta as respostas e marca a dificuldade de cada questão, tudo em uma tela só.
 

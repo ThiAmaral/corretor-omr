@@ -91,3 +91,84 @@ button:hover { background: #2c4160; }
 .respostas { max-width: none; }
 .respostas select { width: auto; min-width: 150px; }
 @media (max-width: 800px) { .revisao { grid-template-columns: 1fr; } .revisao figure { position: static; } }
+
+/* Botões secundários e links com cara de botão */
+button.secundario { background: var(--superficie); color: var(--tinta); border: 1px solid #b9c0ca; }
+button.secundario:hover { background: var(--papel); }
+button.link { background: none; color: var(--grafite); padding: 10px 4px; text-decoration: underline; text-underline-offset: 3px; font-weight: 400; }
+button.link:hover { background: none; color: var(--tinta); }
+button.perigo { color: var(--reforco); }
+.aviso.atencao { background: var(--atencao-fundo); color: var(--atencao); }
+.erro p { margin: 0; }
+.erro p + p { margin-top: 4px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Revisão do gabarito: imagem lida à esquerda, cartões das questões à direita */
+.revisao-gabarito { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.4fr); gap: 24px; align-items: start; margin-top: 20px; }
+.revisao-gabarito.sem-imagem { grid-template-columns: minmax(0, 1fr); }
+.revisao-gabarito figure { margin: 0; position: sticky; top: 16px; }
+.revisao-gabarito img { width: 100%; border: 1px solid var(--linha); border-radius: var(--raio); background: #fff; }
+.revisao-gabarito figcaption { color: var(--grafite); font-size: 14px; margin-top: 6px; }
+.painel { display: grid; gap: 16px; min-width: 0; }
+.campo-nome { display: grid; gap: 4px; font-weight: 700; font-size: 15px; max-width: 520px; }
+
+/* Faixa colorida: um segmento por questão, na cor da disciplina */
+.faixa-disciplinas .rotulo { font-weight: 700; font-size: 15px; margin: 0 0 6px; }
+.faixa { list-style: none; margin: 0; padding: 0; display: flex; gap: 2px; }
+.faixa li { flex: 1; height: 18px; background: var(--cor, transparent); border-radius: 2px; cursor: pointer; min-width: 4px; }
+.faixa li.vazia, .amostra.vazia { background: repeating-linear-gradient(45deg, var(--linha) 0 3px, var(--superficie) 3px 6px); border: 1px solid var(--linha); }
+.faixa li.selecionada { outline: 2px solid var(--tinta); outline-offset: 1px; }
+.legenda { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 14px; color: var(--grafite); }
+.legenda li { display: flex; align-items: center; gap: 6px; }
+.amostra { width: 12px; height: 12px; border-radius: 2px; background: var(--cor); display: inline-block; }
+
+/* Barra de seleção de intervalo */
+.selecao { position: sticky; top: 0; z-index: 2; background: var(--superficie); border: 1px solid var(--linha); border-radius: var(--raio); padding: 10px 14px; box-shadow: 0 2px 6px rgba(28, 43, 63, 0.08); }
+.selecao .dica { margin: 0; }
+.selecao .selecionadas { margin: 2px 0 8px; font-weight: 700; }
+.selecao .acoes { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.selecao label { display: grid; gap: 2px; font-size: 13px; font-weight: 700; }
+.selecao select { width: auto; min-width: 170px; padding: 7px 8px; }
+.selecao button { padding: 8px 12px; font-size: 15px; }
+.selecao .grupo { display: inline-flex; gap: 4px; }
+
+/* Cartões das questões */
+.cartoes { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+.cartao { margin: 0; min-width: 0; background: var(--superficie); border: 1px solid var(--linha); border-left: 5px solid var(--cor, var(--linha)); border-radius: var(--raio); padding: 6px 12px 12px; display: grid; gap: 10px; }
+.cartao.duvidosa { background: var(--atencao-fundo); border-color: #e3c48f; border-left-color: var(--cor, var(--atencao)); }
+.cartao.selecionada { box-shadow: 0 0 0 2px var(--tinta); }
+.cartao legend { padding: 0; display: flex; align-items: center; gap: 8px; float: left; width: 100%; }
+.cartao legend + * { clear: both; }
+.cartao .numero { background: none; color: var(--tinta); padding: 2px 6px; margin-left: -6px; font-size: 18px; font-variant-numeric: tabular-nums; border-radius: var(--raio); }
+.cartao .numero:hover, .cartao .numero[aria-pressed="true"] { background: var(--papel); }
+.cartao .campo { display: grid; gap: 2px; font-size: 13px; font-weight: 700; color: var(--grafite); }
+.cartao .campo .dica { display: inline; font-size: 12px; }
+.cartao select, .cartao input:not([type="radio"]) { padding: 6px 8px; font-size: 15px; }
+
+/* Botões segmentados (resposta e dificuldade) feitos de rádios */
+.opcoes { display: flex; gap: 4px; }
+.opcoes label { flex: 1; position: relative; }
+.opcoes input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.opcoes span { display: block; text-align: center; padding: 6px 0; border: 1px solid #b9c0ca; border-radius: var(--raio); background: var(--superficie); font-weight: 700; cursor: pointer; user-select: none; }
+.opcoes.dificuldade span { font-size: 13px; font-weight: 400; padding: 5px 0; }
+.opcoes input:checked + span { background: var(--tinta); border-color: var(--tinta); color: #fff; }
+.opcoes input:focus-visible + span { outline: 2px solid var(--tinta); outline-offset: 2px; }
+.opcoes.dificuldade input[value="facil"]:checked + span { background: var(--certo); border-color: var(--certo); }
+.opcoes.dificuldade input[value="medio"]:checked + span { background: var(--atencao); border-color: var(--atencao); }
+.opcoes.dificuldade input[value="dificil"]:checked + span { background: var(--reforco); border-color: var(--reforco); }
+
+.rodape-revisao { display: flex; flex-wrap: wrap; gap: 12px; position: sticky; bottom: 0; padding: 12px 0; background: linear-gradient(to top, var(--papel) 75%, transparent); }
+.descartar { margin-top: 8px; }
+
+@media (max-width: 860px) {
+  .revisao-gabarito { grid-template-columns: 1fr; }
+  .revisao-gabarito figure { position: static; }
+}
+@media (max-width: 640px) {
+  /* No celular a barra fixa cobriria metade da tela: ela fica no lugar, mais compacta. */
+  .selecao { position: static; box-shadow: none; }
+  .selecao .acoes { gap: 6px; }
+  .selecao .acoes label { flex: 1 1 100%; }
+  .selecao select { width: 100%; }
+  .selecao button { padding: 7px 10px; font-size: 14px; }
+}

@@ -114,27 +114,53 @@ se ajustam sozinhos.
 
 ## Testar o fluxo completo
 
-### Com a folha AMA
+O cadastro não pede mais o formato da folha nem as áreas. A prova nasce como
+**rascunho**, passa pela tela **Revisar gabarito** e só recebe folhas depois de
+aprovada.
 
-1. Em **Nova prova**, use 26 questões, 4 colunas, alternativas `A,B,C,D`
-   (as colunas podem ter tamanhos diferentes: a AMA tem 7, 7, 7 e 5).
-2. Envie `exemplos/ama/geradas_8A/gabarito.jpg` como gabarito. O sistema confere
-   o formato e guarda o código do caderno lido no QR (`2265M0801`).
+### Com a folha AMA (gabarito por foto)
+
+1. Em **Nova prova**, informe o ano e o período e envie
+   `exemplos/ama/geradas_8A/gabarito.jpg`. O sistema lê o caderno pelo QR
+   (`2265M0801`), o formato (26 questões em blocos de 7, 7, 7 e 5) e as
+   respostas, e sugere o nome "AMA – Matemática 8º ano (M0801)".
+2. Na revisão, todas as questões já vêm com a disciplina Matemática (modelo
+   reconhecido pelo caderno). Confira as respostas, marque a dificuldade e, se
+   quiser, a habilidade (ex.: `D07`). Para aplicar a várias questões de uma vez,
+   clique no número da primeira e no da última. Depois, **Aprovar gabarito**.
 3. Na página da prova, envie as fotos `exemplos/ama/geradas_8A/8A_aluno*.jpg`
    com a turma `8A`. Folhas de outro caderno são recusadas.
 
-### Com o modelo antigo
+### Com o gabarito digitado
 
-1. Em **Nova prova**, use 20 questões, 2 colunas, alternativas `A,B,C,D`.
-2. Envie `exemplos/gabarito_oficial.png` como gabarito (ou digite `CCADCBCABADDBBCDCCCC`).
-3. Áreas: deixe em branco ou use `Linguagens: 1-10` e `Matemática: 11-20`.
-4. Na página da prova, envie as folhas de `exemplos/provas_7A` com a turma `7A`
+Em **Nova prova**, digite `AACBBBAADAAABBABDBDCABDCCB`. Sem foto, o formato e o
+caderno vêm da primeira folha de aluno enviada; folhas com outro número de
+questões ou de outro caderno são recusadas com o motivo.
+
+### Com o modelo antigo (várias disciplinas)
+
+1. Envie `exemplos/gabarito_oficial.png` como gabarito (ou digite `CCADCBCABADDBBCDCCCC`).
+2. Como não há caderno conhecido, escolha as disciplinas na revisão: clique na
+   questão 1 e na 10 e aplique Língua Portuguesa; depois 11 e 20, Matemática. A
+   faixa colorida mostra o que já tem disciplina, e a prova não pode ser
+   aprovada com questões sem disciplina.
+3. Na página da prova, envie as folhas de `exemplos/provas_7A` com a turma `7A`
    (ou o PDF `turma_7A.pdf`, uma folha por página) e depois as de `provas_7B`.
-5. Folhas com marcação fraca ou dupla aparecem com o selo "Revisar". Abra,
+4. Folhas com marcação fraca ou dupla aparecem com o selo "Revisar". Abra,
    confira a imagem anotada e salve.
 
-As áreas podem ser alteradas a qualquer momento (por exemplo, `Matemática: 1-20`)
-e os relatórios são recalculados sem reenviar as folhas.
+Gabarito, disciplinas e dificuldade podem ser alterados depois em **Editar
+gabarito e dificuldade**, na página da prova; os relatórios são recalculados sem
+reenviar as folhas. Novos modelos de caderno (disciplina automática) entram em
+`modelos_de_prova()` no `web/lib.php`, e o catálogo de disciplinas em
+`disciplinas()`.
+
+Testes das regras do PHP (correção, revisão do gabarito, modelos de caderno,
+formato vindo da 1ª folha), sem banco:
+
+```bash
+php web/testes/regras.php
+```
 
 ## Testar só o leitor (sem PHP)
 
@@ -215,7 +241,7 @@ python -m pytest worker/testes -q
 
 ## Limitações conhecidas
 
-- Os blocos detectados precisam bater com o layout cadastrado, e o caderno do
+- Os blocos detectados precisam bater com o formato da prova, e o caderno do
   QR com o da prova; se não baterem, a folha aparece em "não puderam ser lidas"
   com o motivo.
 - As folhas de teste são simulações. Antes de usar com a escola, rode o
@@ -223,8 +249,9 @@ python -m pytest worker/testes -q
   e `ZONA_DUVIDA` em `worker/omr.py` se necessário.
 - Sem autenticação nem proteção CSRF: é um protótipo para uso local. O login
   com Supabase Auth chega na Fase 6.
-- As áreas da prova não podem mais se sobrepor (cada questão guarda uma
-  disciplina só, na tabela `questoes`).
+- Cada questão tem uma disciplina só (tabela `questoes`).
+- A letra `L` do caderno como Língua Portuguesa ainda não foi confirmada; por
+  enquanto é só uma sugestão, que o professor confere na revisão.
 - No modelo impresso atual, a 4ª bolinha das questões 15, 17 e 19 está rotulada
   como "A". A leitura é por posição, então não afeta a correção, mas vale
   corrigir o arquivo da folha.

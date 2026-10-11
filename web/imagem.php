@@ -2,10 +2,16 @@
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
 
-// A imagem anotada fica num bucket privado do Supabase Storage: gera uma URL
+// As imagens anotadas ficam num bucket privado do Supabase Storage: gera uma URL
 // assinada, que vale por poucos minutos, e manda o navegador para ela.
-$st = db()->prepare('SELECT imagem_debug FROM folhas WHERE id = ?');
-$st->execute([(int)($_GET['folha'] ?? 0)]);
+// ?folha=<id>: folha de aluno lida. ?prova=<id>: foto do gabarito oficial lida.
+if (isset($_GET['prova'])) {
+    $st = db()->prepare('SELECT imagem_gabarito FROM provas WHERE id = ?');
+    $st->execute([(int)$_GET['prova']]);
+} else {
+    $st = db()->prepare('SELECT imagem_debug FROM folhas WHERE id = ?');
+    $st->execute([(int)($_GET['folha'] ?? 0)]);
+}
 $caminho = $st->fetchColumn();
 if (!$caminho) {
     http_response_code(404);
