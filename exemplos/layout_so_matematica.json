@@ -1,0 +1,10 @@
+{
+  "nome": "Prova de matemática",
+  "questoes": 20,
+  "alternativas": ["A", "B", "C", "D"],
+  "colunas": 2,
+  "ordem": "colunas",
+  "areas": [
+    {"nome": "Matemática", "de": 1, "ate": 20}
+  ]
+}

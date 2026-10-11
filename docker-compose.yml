@@ -1,0 +1,13 @@
+services:
+  corretor:
+    build: .
+    ports:
+      - "8080:80"
+    volumes:
+      - dados:/var/www/armazenamento
+    environment:
+      LIMITE_REFORCO: "60"
+      PERIODO_ESCOLA: "bimestre"   # bimestre, trimestre ou semestre
+
+volumes:
+  dados:

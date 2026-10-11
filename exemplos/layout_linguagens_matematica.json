@@ -1,0 +1,11 @@
+{
+  "nome": "Teste seletivo 7º ano",
+  "questoes": 20,
+  "alternativas": ["A", "B", "C", "D"],
+  "colunas": 2,
+  "ordem": "colunas",
+  "areas": [
+    {"nome": "Linguagens", "de": 1, "ate": 10},
+    {"nome": "Matemática", "de": 11, "ate": 20}
+  ]
+}
