@@ -18,6 +18,25 @@ define('OMR_CLI', RAIZ . '/worker/omr_cli.py');
 define('LIMITE_REFORCO', (float)(getenv('LIMITE_REFORCO') ?: 60)); // % de acerto
 define('PERIODO_ESCOLA', getenv('PERIODO_ESCOLA') ?: 'bimestre'); // bimestre, trimestre ou semestre
 
+// Todo texto recebido vira UTF-8 válido antes de chegar ao banco (ver utf8_valido()).
+$_GET = utf8_valido($_GET);
+$_POST = utf8_valido($_POST);
+
+/**
+ * O navegador sempre envia UTF-8, mas outros clientes (curl no Windows, o app) podem
+ * enviar Windows-1252. Byte inválido quebra a consulta no PostgreSQL, então converte.
+ */
+function utf8_valido(mixed $valor): mixed
+{
+    if (is_array($valor)) {
+        return array_map('utf8_valido', $valor);
+    }
+    if (is_string($valor) && !mb_check_encoding($valor, 'UTF-8')) {
+        return mb_convert_encoding($valor, 'UTF-8', 'Windows-1252');
+    }
+    return $valor;
+}
+
 /** Lê o .env da raiz quando o sistema roda sem Docker. Variáveis já definidas no ambiente têm prioridade. */
 function carregar_env(string $arquivo): void
 {

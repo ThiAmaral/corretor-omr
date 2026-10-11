@@ -13,7 +13,7 @@ Legenda: ✅ feito · 🔄 em andamento · ⏳ pendente · ⚠️ bloqueado / de
 | 0. Preparação | 🔄 | Git pronto; faltam as folhas AMA reais e o significado do QR |
 | 1. Leitor AMA com detecção do formato | ✅ (com fotos geradas) | Falta validar com fotos reais (depende da Fase 0) |
 | 2. Supabase | ✅ | Testado no projeto real (`xcmyknrojawmolnffltf`). Só o Docker não foi testado (não instalado nesta máquina) |
-| 3. Revisão do gabarito, áreas e dificuldade | ✅ (teste local) | Testada num PostgreSQL local; falta aplicar a migração nova no projeto real e repetir o teste lá |
+| 3. Revisão do gabarito, áreas e dificuldade | ✅ | Testada no projeto real (migração aplicada pelo Thiago) |
 | 4. Relatórios por dificuldade | ⏳ | |
 | 5. Fotos de celular | ⏳ | Parte já adiantada na Fase 1 (ver abaixo) |
 | 6. API e login | ⏳ | |
@@ -262,15 +262,14 @@ são ~130 + ~140 KB.
 
 Início e término da implementação: 2026-10-11.
 
-Testada como a Fase 2: PostgreSQL local (PGlite) com as duas migrações
-aplicadas e o Storage simulado, com o navegador e com `curl`. **A migração nova
-ainda não foi aplicada no projeto real** (ver pendências).
+Testada primeiro como a Fase 2 (PostgreSQL local com PGlite e Storage
+simulado) e depois no projeto real, com o navegador e com `curl`.
 
 ### Itens
 
 | # | Item | Situação | Observação |
 |---|---|---|---|
-| 3.1 | Migração `20261011232850_revisao_do_gabarito.sql` | ✅ local · ⏳ projeto real | `provas.imagem_gabarito`, `questoes.duvidosa`, `questoes.resposta` pode ficar vazia no rascunho |
+| 3.1 | Migração `20261011232850_revisao_do_gabarito.sql` | ✅ | Aplicada no projeto real pelo Thiago (2026-10-11). `provas.imagem_gabarito`, `questoes.duvidosa`, `questoes.resposta` pode ficar vazia no rascunho |
 | 3.2 | Cadastro novo em `index.php` | ✅ | Só ano, período e gabarito (foto **ou** digitado); nome opcional. Sem questões, colunas, numeração nem áreas. Grava `status = 'rascunho'` e abre a revisão |
 | 3.3 | Catálogo de disciplinas e `modelos_de_prova()` | ✅ | `disciplinas()` (8 disciplinas fixas). Caderno `…M0801` → Matemática, 8º ano, todas as questões preenchidas. `L` → Língua Portuguesa como **sugestão** (não confirmado). Caderno desconhecido: o professor escolhe |
 | 3.4 | Tela `gabarito.php` | ✅ | Imagem anotada do gabarito (`imagem.php?prova=`), formato detectado, nome sugerido editável, um cartão por questão: resposta (botões A–D), disciplina (lista), dificuldade (Fácil/Médio/Difícil), habilidade opcional |
@@ -278,8 +277,8 @@ ainda não foi aplicada no projeto real** (ver pendências).
 | 3.6 | Aprovação | ✅ | `rascunho` → `ativa`. Exige resposta e disciplina em todas as questões (dificuldade é opcional). Rascunho pode ser salvo incompleto ou descartado. `prova.php` de rascunho redireciona para a revisão |
 | 3.7 | Gabarito digitado | ✅ | Formato e caderno vêm da 1ª folha boa; folhas com outro número de questões, outro caderno ou alternativa inexistente são recusadas com o motivo |
 | 3.8 | `prova.php` | ✅ | Sai o `textarea` de áreas; entra o link "Editar gabarito e dificuldade" (mesma tela). Numa prova ativa, a revisão não deixa apagar resposta nem disciplina |
-| 3.9 | Testes PHP | ✅ | `php web/testes/regras.php`: 18 testes (correção, modelos de caderno, rascunho, aprovação, formato pela 1ª folha) |
-| 3.10 | Teste de ponta a ponta | ✅ local | Ver abaixo |
+| 3.9 | Testes PHP | ✅ | `php web/testes/regras.php`: 19 testes (correção, modelos de caderno, rascunho, aprovação, formato pela 1ª folha) |
+| 3.10 | Teste de ponta a ponta | ✅ | Local e no projeto real; ver abaixo |
 
 ### Resultados do teste local
 
@@ -293,6 +292,27 @@ ainda não foi aplicada no projeto real** (ver pendências).
 | Editar prova ativa | Trocar a resposta da questão 1 recalculou o relatório na hora (63,1% → 61,0%); apagar uma disciplina foi recusado |
 | Celular (375 px) | Sem rolagem horizontal; cartões em uma coluna; barra de seleção deixa de ser fixa |
 | `pytest worker/testes` | 18/18 |
+
+### Teste no projeto real (2026-10-11)
+
+Conferido antes, só com leitura, que as colunas `provas.imagem_gabarito` e
+`questoes.duvidosa` existiam no banco.
+
+| Cenário | Resultado |
+|---|---|
+| M0801 por foto ("TESTE Fase 3 - AMA foto", id 4) | Caderno, modelo Matemática e imagem do gabarito no Storage (abre pela URL assinada). Aprovada; 8A **63,1%**; folha do modelo antigo recusada |
+| M0801 digitada ("TESTE Fase 3 – AMA digitado", id 5) | Caderno `2265M0801`, modelo e blocos gravados pela 1ª folha; 8A **63,1%**; folha de 20 questões recusada |
+| Várias disciplinas ("TESTE Fase 3 – várias disciplinas", id 6) | 7A **61,3%** (63,3% / 59,2%), 7B **61,5%** (60,0% / 63,0%) |
+| Descartar rascunho | OK (id 3, criado por engano durante o teste) |
+
+Tempo: 21 fotos em 33 a 40 s (leitura + 2 envios ao Storage por folha), um
+pouco acima dos ~21 s da Fase 2; a variação parece ser da rede.
+
+**Erro encontrado e corrigido:** um nome enviado em Windows-1252 (o `curl` do
+Git Bash) não era UTF-8 válido, e o PDO acabava gravando a prova de forma que
+as questões davam violação de chave estrangeira. O navegador sempre manda UTF-8,
+mas o app da Fase 6 é outro cliente. Agora o `lib.php` converte qualquer texto
+recebido em `$_GET`/`$_POST` para UTF-8 (`utf8_valido()`), com teste.
 
 ### Mudanças fora do previsto
 
@@ -309,12 +329,10 @@ ainda não foi aplicada no projeto real** (ver pendências).
 
 ### Pendências e riscos
 
-- **Aplicar a migração no projeto real** (`npx supabase db push`) e repetir os
-  três cenários lá. Sem ela, o PHP novo falha no projeto real (colunas
-  `imagem_gabarito` e `duvidosa` não existem).
-- **Provas de teste da Fase 2** (ids 1 e 2 do projeto real) continuam com
-  `status = 'ativa'`; seguem funcionando, com as áreas antigas ("Linguagens")
-  aceitas na revisão.
+- **Provas de teste no projeto real:** ids 1 e 2 (Fase 2) e 4, 5 e 6 (Fase 3),
+  com as imagens no Storage. Apagar antes do piloto (o banco apaga em cascata,
+  mas os arquivos dos buckets não). As da Fase 2 continuam funcionando, com as
+  áreas antigas ("Linguagens") aceitas na revisão.
 - **Letra do caderno para Língua Portuguesa** e o significado do resto do código
   (pergunta em aberto da Fase 0). Até lá, só o `M` é confirmado.
 - **Dificuldade é opcional** na aprovação. Se a Fase 4 depender dela em todas as
@@ -334,3 +352,5 @@ ainda não foi aplicada no projeto real** (ver pendências).
 - **2026-10-11** — Teste de ponta a ponta local nos três cenários do "pronto
   quando" e nos casos de borda. Ajustes: erros agrupados e barra de seleção não
   fixa no celular.
+- **2026-10-11** — Migração aplicada no projeto real pelo Thiago. Três cenários
+  repetidos lá, com os mesmos números. Corrigido o texto recebido fora de UTF-8.

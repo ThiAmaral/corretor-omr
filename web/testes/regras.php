@@ -39,6 +39,12 @@ teste('corrigir: branco e dupla contam como erro', function () {
     igual([true, false, false, false], corrigir(['A', 'B', 'C', 'D'], ['A', null, 'MULTIPLA', 'A']));
 });
 
+teste('texto em Windows-1252 vira UTF-8', function () {
+    igual(['nome' => 'Prova – Matemática', 'q' => [['disciplina' => 'Matemática']]],
+        utf8_valido(['nome' => "Prova \x96 Matem\xe1tica", 'q' => [['disciplina' => "Matem\xe1tica"]]]));
+    igual('já em UTF-8', utf8_valido('já em UTF-8'));
+});
+
 /* ------------------------------------------------- Modelos de caderno */
 
 teste('caderno de Matemática vira disciplina automática', function () {
