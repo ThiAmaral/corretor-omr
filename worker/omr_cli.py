@@ -1,11 +1,16 @@
 """
 Linha de comando do leitor óptico.
 
+  detectar  Descobre o formato da folha (caderno, blocos, alternativas) e imprime JSON.
   ler       Lê folhas (PNG/JPG/PDF) e imprime JSON. É o que o backend PHP chama.
+            Sem --layout, cada folha tem o formato detectado sozinho.
   corrigir  Teste rápido sem o PHP: lê gabarito + provas e imprime a taxa de acerto.
+            Sem --layout, usa o formato (e o caderno) detectado no gabarito.
 
 Exemplos:
+  python worker/omr_cli.py detectar exemplos/ama/geradas_8A/gabarito.jpg
   python worker/omr_cli.py ler exemplos/provas_7A/turma_7A.pdf --layout exemplos/layout_linguagens_matematica.json
+  python worker/omr_cli.py corrigir --gabarito exemplos/ama/geradas_8A/gabarito.jpg       --provas exemplos/ama/geradas_8A --turma 8A
   python worker/omr_cli.py corrigir --gabarito exemplos/gabarito_oficial.png \
       --provas exemplos/provas_7A --turma 7A --layout exemplos/layout_linguagens_matematica.json
 """
@@ -79,20 +84,38 @@ def pct(a, b):
     return f"{100 * a / b:5.1f}%" if b else "   - "
 
 
+def carregar_layout(caminho):
+    if not caminho:
+        return {}, None
+    cfg = json.load(open(caminho, encoding="utf-8"))
+    return cfg, omr.Layout.de_dict(cfg)
+
+
+def cmd_detectar(a):
+    saida = []
+    for item in ler_arquivos(expandir(a.arquivos), None, a.debug):
+        if item["ok"] and not a.respostas:
+            item.pop("respostas")
+        saida.append(item)
+    json.dump(saida, sys.stdout, ensure_ascii=False, indent=1)
+
+
 def cmd_ler(a):
-    cfg = json.load(open(a.layout, encoding="utf-8"))
-    layout = omr.Layout.de_dict(cfg)
+    _, layout = carregar_layout(a.layout)
     json.dump(ler_arquivos(expandir(a.arquivos), layout, a.debug), sys.stdout, ensure_ascii=False)
 
 
 def cmd_corrigir(a):
-    cfg = json.load(open(a.layout, encoding="utf-8"))
-    layout = omr.Layout.de_dict(cfg)
-    areas = areas_do_layout(cfg, layout.questoes)
+    cfg, layout = carregar_layout(a.layout)
 
     gab = ler_arquivos([a.gabarito], layout, a.debug)[0]
     if not gab["ok"]:
         sys.exit(f"Gabarito ilegível: {gab['erro']}")
+    if layout is None:  # formato e caderno detectados no gabarito valem para as folhas
+        layout = omr.Layout.de_dict(gab["layout"])
+        print(f"Formato detectado: caderno {layout.caderno or '-'}, blocos {layout.blocos}, "
+              f"alternativas {''.join(layout.alternativas)}")
+    areas = areas_do_layout(cfg, layout.questoes)
     problemas = [r["questao"] for r in gab["respostas"] if r["situacao"] != "marcada"]
     if problemas:
         sys.exit(f"O gabarito precisa ter exatamente uma marcação por questão. Verifique: {problemas}")
@@ -134,12 +157,20 @@ def cmd_corrigir(a):
 
 
 def main():
+    # O PHP lê a saída como UTF-8; no Windows o padrão do console seria outro.
+    sys.stdout.reconfigure(encoding="utf-8")
     p = argparse.ArgumentParser(description="Leitor óptico de folhas de resposta")
     sub = p.add_subparsers(dest="comando", required=True)
 
+    pd = sub.add_parser("detectar")
+    pd.add_argument("arquivos", nargs="+")
+    pd.add_argument("--respostas", action="store_true", help="inclui também a leitura das bolinhas")
+    pd.add_argument("--debug", help="pasta para salvar imagens anotadas")
+    pd.set_defaults(func=cmd_detectar)
+
     pl = sub.add_parser("ler")
     pl.add_argument("arquivos", nargs="+")
-    pl.add_argument("--layout", required=True)
+    pl.add_argument("--layout", help="layout da prova; sem ele, o formato é detectado")
     pl.add_argument("--debug", help="pasta para salvar imagens anotadas")
     pl.set_defaults(func=cmd_ler)
 
@@ -147,7 +178,7 @@ def main():
     pc.add_argument("--gabarito", required=True)
     pc.add_argument("--provas", nargs="+", required=True)
     pc.add_argument("--turma", default="sem turma")
-    pc.add_argument("--layout", required=True)
+    pc.add_argument("--layout", help="sem ele, usa o formato detectado no gabarito")
     pc.add_argument("--debug")
     pc.set_defaults(func=cmd_corrigir)
 

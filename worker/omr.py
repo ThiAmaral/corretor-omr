@@ -6,12 +6,14 @@ questão. Comparar com o gabarito e calcular notas é responsabilidade do
 backend (PHP), para que a regra de correção fique em um lugar só.
 
 Etapas de ler_folha():
-  1. Lê o QR code (código do caderno, na folha AMA).
-  2. Alinha a área de respostas pelos 4 quadrados pretos dos cantos (folha AMA).
-     Sem marcadores, procura a moldura retangular (modelo do protótipo).
-  3. Detecta as bolinhas (círculos vazios e preenchidos).
-  4. Descobre os blocos de questões e organiza as bolinhas por questão.
-  5. Mede o quanto cada bolinha está escurecida e decide a marcação.
+  1. Normaliza a iluminação e procura os 4 quadrados pretos dos cantos da área
+     de respostas (folha AMA).
+  2. Lê o QR code (código do caderno), que também indica o lado de cima.
+  3. Endireita a área entre os marcadores. Sem marcadores, procura a moldura
+     retangular (modelo do protótipo).
+  4. Detecta as bolinhas (círculos vazios e preenchidos).
+  5. Descobre os blocos de questões e organiza as bolinhas por questão.
+  6. Mede o quanto cada bolinha está escurecida e decide a marcação.
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ import cv2
 import numpy as np
 
 LARGURA_NORMALIZADA = 1000  # px; toda folha é redimensionada para esta largura
+MARGEM_AREA = 0.04  # folga em volta dos marcadores, em fração da largura
 
 # Limiares sobre o nível calibrado (0 = bolinha vazia típica, 1 = toda preenchida)
 LIMIAR_MARCADA = 0.50
@@ -115,38 +118,20 @@ def carregar_paginas(caminho: str) -> list[np.ndarray]:
 
 
 # ---------------------------------------------------------------------------
-# 1. QR code
+# 1. Iluminação e marcadores
 # ---------------------------------------------------------------------------
 
-def ler_qr(cinza: np.ndarray) -> tuple[str | None, np.ndarray | None]:
-    """Devolve (texto, cantos do QR na imagem). Tenta em mais de uma escala,
-    porque fotos grandes ou pequenas demais atrapalham o detector."""
+def normalizar_iluminacao(cinza: np.ndarray) -> np.ndarray:
+    """Divide a imagem pelo próprio fundo (papel + sombra), estimado apagando o
+    que é escuro e pequeno. O papel vira ~255 em toda a foto, com ou sem sombra."""
     h, w = cinza.shape
-    lado = max(h, w)
-    escalas = [1.0]
-    if lado > 2400:
-        escalas.append(2000 / lado)
-    if lado < 1600:
-        escalas.append(2.0)
-    detectores = [cv2.QRCodeDetector()]
-    if hasattr(cv2, "QRCodeDetectorAruco"):
-        detectores.append(cv2.QRCodeDetectorAruco())
-    for esc in escalas:
-        img = cinza if esc == 1.0 else cv2.resize(cinza, None, fx=esc, fy=esc, interpolation=cv2.INTER_AREA
-                                                   if esc < 1 else cv2.INTER_CUBIC)
-        for det in detectores:
-            try:
-                texto, pontos, _ = det.detectAndDecode(img)
-            except cv2.error:
-                continue
-            if texto and pontos is not None:
-                return texto.strip(), pontos.reshape(-1, 2) / esc
-    return None, None
+    esc = 800 / max(h, w)
+    peq = cv2.resize(cinza, None, fx=esc, fy=esc, interpolation=cv2.INTER_AREA)
+    k = int(0.05 * 800) | 1  # maior que marcadores e bolinhas
+    fundo = cv2.morphologyEx(peq, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    fundo = cv2.resize(cv2.GaussianBlur(fundo, (k, k), 0), (w, h), interpolation=cv2.INTER_LINEAR)
+    return np.clip(cinza.astype(np.float32) / np.maximum(fundo, 1) * 255, 0, 255).astype(np.uint8)
 
-
-# ---------------------------------------------------------------------------
-# 2. Alinhar a área de respostas
-# ---------------------------------------------------------------------------
 
 def _ordenar_cantos(pts: np.ndarray) -> np.ndarray:
     pts = pts.reshape(4, 2).astype("float32")
@@ -155,34 +140,26 @@ def _ordenar_cantos(pts: np.ndarray) -> np.ndarray:
     return np.array([pts[np.argmin(s)], pts[np.argmin(d)], pts[np.argmax(s)], pts[np.argmax(d)]], dtype="float32")
 
 
-def _candidatos_marcador(cinza: np.ndarray, qr: np.ndarray | None) -> list[tuple[float, float, float]]:
-    """Quadrados pretos cheios: (x do centro, y do centro, lado)."""
-    h, w = cinza.shape
+def _candidatos_marcador(normal: np.ndarray) -> list[tuple[float, float, float]]:
+    """Quadrados pretos cheios e isolados: (x do centro, y do centro, lado).
+    Recebe a imagem com a iluminação já normalizada."""
+    h, w = normal.shape
     lado_img = max(h, w)
-    suave = cv2.GaussianBlur(cinza, (5, 5), 0)
-    _, binaria = cv2.threshold(suave, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    _, binaria = cv2.threshold(cv2.GaussianBlur(normal, (5, 5), 0), 150, 255, cv2.THRESH_BINARY_INV)
     contornos, _ = cv2.findContours(binaria, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-
-    if qr is not None:  # os padrões do QR também são quadrados pretos
-        qx0, qy0 = qr.min(axis=0)
-        qx1, qy1 = qr.max(axis=0)
-        folga = 0.15 * max(qx1 - qx0, qy1 - qy0)
-        qx0, qy0, qx1, qy1 = qx0 - folga, qy0 - folga, qx1 + folga, qy1 + folga
 
     candidatos = []
     for c in contornos:
         x, y, cw, ch = cv2.boundingRect(c)
-        if not (0.006 * lado_img <= cw <= 0.05 * lado_img and 0.006 * lado_img <= ch <= 0.05 * lado_img):
+        if not (0.006 * lado_img <= cw <= 0.06 * lado_img and 0.006 * lado_img <= ch <= 0.06 * lado_img):
             continue
-        if not (0.7 <= cw / ch <= 1.4):
+        (cx, cy), (rw, rh), _ = cv2.minAreaRect(c)  # caixa girada: vale para foto torta
+        if not rw or not rh or not (0.7 <= rw / rh <= 1.4):
             continue
         area = cv2.contourArea(c)
         casco = cv2.contourArea(cv2.convexHull(c))
         # Quadrado cheio ocupa ~100% da caixa; círculo cheio, ~78%.
-        if area / (cw * ch) < 0.84 or not casco or area / casco < 0.9:
-            continue
-        cx, cy = x + cw / 2, y + ch / 2
-        if qr is not None and qx0 <= cx <= qx1 and qy0 <= cy <= qy1:
+        if area / (rw * rh) < 0.84 or not casco or area / casco < 0.9:
             continue
         # Preto por dentro (exclui o miolo branco de quadradinhos de grade)...
         mascara = np.zeros((ch, cw), np.uint8)
@@ -209,25 +186,54 @@ def _angulos_internos(cantos: np.ndarray) -> list[float]:
     return angs
 
 
-def _escolher_quatro(candidatos, area_img: float):
+def _quadrilatero_valido(cantos: np.ndarray) -> bool:
+    if len({tuple(np.round(p, 1)) for p in cantos}) < 4 or not cv2.isContourConvex(cantos.reshape(-1, 1, 2)):
+        return False
+    return all(abs(a - 90) <= 30 for a in _angulos_internos(cantos))
+
+
+def localizar_marcadores(normal: np.ndarray):
     """Entre os candidatos, os 4 que formam o maior quadrilátero 'quase
-    retangular' com quadrados de tamanho parecido."""
-    if len(candidatos) < 4:
-        return None
-    candidatos = sorted(candidatos, key=lambda c: -c[2])[:24]
-    melhor, melhor_area = None, 0.08 * area_img  # a área de respostas não é minúscula
+    retangular' com quadrados de tamanho parecido. Se só 3 forem achados (um
+    dedo ou uma dobra cobrindo um canto), o 4º é estimado completando o
+    paralelogramo. Devolve (cantos tl, tr, br, bl; lado médio do marcador;
+    se um canto foi estimado) ou None."""
+    candidatos = sorted(_candidatos_marcador(normal), key=lambda c: -c[2])[:24]
+    area_minima = 0.08 * normal.size  # a área de respostas não é minúscula
+    melhor, melhor_area = None, area_minima
     for combo in itertools.combinations(candidatos, 4):
         lados = [c[2] for c in combo]
         if max(lados) > 1.5 * min(lados):
             continue
         cantos = _ordenar_cantos(np.array([(c[0], c[1]) for c in combo]))
-        if len({tuple(p) for p in cantos}) < 4 or not cv2.isContourConvex(cantos.reshape(-1, 1, 2)):
-            continue
-        if any(abs(a - 90) > 30 for a in _angulos_internos(cantos)):
+        if not _quadrilatero_valido(cantos):
             continue
         area = cv2.contourArea(cantos)
         if area > melhor_area:
-            melhor, melhor_area = (cantos, float(np.mean(lados))), area
+            melhor, melhor_area = (cantos, float(np.mean(lados)), False), area
+    if melhor:
+        return melhor
+
+    h, w = normal.shape
+    for combo in itertools.combinations(candidatos, 3):
+        lados = [c[2] for c in combo]
+        if max(lados) > 1.25 * min(lados):  # sem o 4º para conferir, exige mais
+            continue
+        pts = np.array([(c[0], c[1]) for c in combo], dtype="float32")
+        for i in range(3):  # i = vértice do ângulo reto
+            a, b, c = pts[(i + 1) % 3], pts[i], pts[(i + 2) % 3]
+            cos = np.dot(a - b, c - b) / (np.linalg.norm(a - b) * np.linalg.norm(c - b) + 1e-9)
+            if abs(cos) > 0.34:  # ângulo em b longe de 90° (± 20°)
+                continue
+            quarto = a + c - b
+            if not (-0.05 * w <= quarto[0] <= 1.05 * w and -0.05 * h <= quarto[1] <= 1.05 * h):
+                continue
+            cantos = _ordenar_cantos(np.array([a, b, c, quarto]))
+            if not _quadrilatero_valido(cantos):
+                continue
+            area = cv2.contourArea(cantos)
+            if area > melhor_area:
+                melhor, melhor_area = (cantos, float(np.mean(lados)), True), area
     return melhor
 
 
@@ -241,32 +247,76 @@ def _transformacao(cantos: np.ndarray):
     return cv2.getPerspectiveTransform(cantos, destino), W, H, larg
 
 
-def alinhar_por_marcadores(cinza: np.ndarray, qr: np.ndarray | None = None):
-    """Procura os 4 quadrados pretos dos cantos da área de respostas e endireita
-    a área entre eles. Devolve (área alinhada, matriz, lado do marcador na área
-    alinhada) ou None se os marcadores não forem encontrados.
+# ---------------------------------------------------------------------------
+# 2. QR code
+# ---------------------------------------------------------------------------
 
-    Se o QR code foi achado, ele indica o lado de cima da folha (fica acima da
-    área de respostas), o que permite ler folhas de cabeça para baixo ou deitadas."""
-    h, w = cinza.shape
-    escolha = _escolher_quatro(_candidatos_marcador(cinza, qr), h * w)
-    if escolha is None:
-        return None
-    cantos, lado = escolha
+def _decodificar_qr(img: np.ndarray, escalas=(1.0,)):
+    detectores = [cv2.QRCodeDetector()]
+    if hasattr(cv2, "QRCodeDetectorAruco"):
+        detectores.append(cv2.QRCodeDetectorAruco())
+    for esc in escalas:
+        im = img if esc == 1.0 else cv2.resize(img, None, fx=esc, fy=esc,
+                                               interpolation=cv2.INTER_AREA if esc < 1 else cv2.INTER_CUBIC)
+        for det in detectores:
+            try:
+                texto, pontos, _ = det.detectAndDecode(im)
+            except cv2.error:
+                continue
+            if texto and pontos is not None:
+                return texto.strip(), pontos.reshape(-1, 2) / esc
+    return None, None
 
-    giro = 0
-    if qr is not None:
-        centro_qr = qr.mean(axis=0).reshape(1, 1, 2).astype("float64")
-        melhor = None
-        for k in range(4):
-            M, W, H, _ = _transformacao(np.roll(cantos, -k, axis=0))
-            _, y = cv2.perspectiveTransform(centro_qr, M).ravel()
-            if melhor is None or y / H < melhor:
-                melhor, giro = y / H, k
-    cantos = np.roll(cantos, -giro, axis=0)
 
-    M, W, H, larg = _transformacao(cantos)
-    area = cv2.warpPerspective(cinza, M, (W, H), flags=cv2.INTER_CUBIC, borderValue=255)
+def ler_qr(cinza: np.ndarray) -> tuple[str | None, np.ndarray | None]:
+    """Procura o QR na imagem inteira. Devolve (texto, cantos do QR na imagem)."""
+    lado = max(cinza.shape)
+    escalas = [1.0] + ([2000 / lado] if lado > 2400 else []) + ([2.0] if lado < 1600 else [])
+    return _decodificar_qr(cinza, escalas)
+
+
+def ler_qr_acima(cinza: np.ndarray, cantos: np.ndarray) -> tuple[str | None, int | None]:
+    """Procura o QR na faixa ACIMA da área de respostas, já endireitada e
+    ampliada, o que funciona em fotos onde o QR inteiro fica pequeno ou torto.
+    Testa as 4 orientações; a que acha o QR diz qual é o lado de cima.
+    Devolve (texto, giro), em que giro = quantos cantos rodar."""
+    for giro in (0, 2, 1, 3):
+        M, W, H, _ = _transformacao(np.roll(cantos, -giro, axis=0))
+        larg = 2400
+        s = larg / W
+        faixa = 1.6 * H * s  # até 1,6 alturas acima dos marcadores de cima
+        T = np.array([[s, 0, 0.05 * larg], [0, s, faixa], [0, 0, 1]]) @ M
+        recorte = cv2.warpPerspective(cinza, T, (int(1.1 * larg), int(faixa)),
+                                      flags=cv2.INTER_CUBIC, borderValue=255)
+        texto, _ = _decodificar_qr(recorte, (1.0, 0.5))
+        if texto:
+            return texto, giro
+    return None, None
+
+
+def _giro_pelo_qr(cantos: np.ndarray, pontos_qr: np.ndarray) -> int:
+    """Orientação em que o QR (achado na imagem inteira) fica acima da área."""
+    centro = pontos_qr.mean(axis=0).reshape(1, 1, 2).astype("float64")
+    notas = []
+    for k in range(4):
+        M, W, H, _ = _transformacao(np.roll(cantos, -k, axis=0))
+        notas.append(cv2.perspectiveTransform(centro, M).ravel()[1] / H)
+    return int(np.argmin(notas))
+
+
+# ---------------------------------------------------------------------------
+# 3. Alinhar a área de respostas
+# ---------------------------------------------------------------------------
+
+def alinhar_por_marcadores(normal: np.ndarray, cantos: np.ndarray, lado: float, giro: int = 0):
+    """Endireita a área entre os 4 marcadores, girando `giro` cantos para que
+    o lado de cima fique em cima. Deixa uma margem em volta, para não cortar
+    bolinhas da borda quando um canto foi estimado ou a folha está curvada.
+    Devolve (área alinhada, matriz imagem -> área, lado do marcador na área)."""
+    M, W, H, larg = _transformacao(np.roll(cantos, -giro, axis=0))
+    m = int(MARGEM_AREA * W)
+    M = np.array([[1, 0, m], [0, 1, m], [0, 0, 1]], dtype="float64") @ M
+    area = cv2.warpPerspective(normal, M, (W + 2 * m, H + 2 * m), flags=cv2.INTER_CUBIC, borderValue=255)
     return area, M, lado * W / larg
 
 
@@ -303,7 +353,7 @@ def localizar_folha(cinza: np.ndarray) -> tuple[np.ndarray, bool, np.ndarray]:
 
 
 # ---------------------------------------------------------------------------
-# 3. Detectar bolinhas
+# 4. Detectar bolinhas
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -352,19 +402,23 @@ def detectar_bolhas(folha: np.ndarray, diametro: tuple[float, float] | None = No
 
 
 # ---------------------------------------------------------------------------
-# 4. Blocos de questões
+# 5. Blocos de questões
 # ---------------------------------------------------------------------------
 
-def estimar_inclinacao(bolhas: list[Bolha], raio: float) -> float:
+def estimar_inclinacao(bolhas: list[Bolha], raio: float, vertical: bool = False) -> float | None:
     """Ângulo (rad) das linhas de bolinhas, usando pares de vizinhas lado a lado.
-    Permite ler folhas tortas mesmo quando a moldura não foi encontrada."""
+    Com vertical=True, o ângulo das colunas (pares uma embaixo da outra), medido
+    a partir da vertical. Permite ler folhas tortas ou com a área "cisalhada"
+    (perspectiva mal corrigida, papel curvado)."""
     angulos = []
     for a in bolhas:
         for b in bolhas:
             dx, dy = b.x - a.x, b.y - a.y
+            if vertical:
+                dx, dy = dy, dx
             if raio * 1.5 < dx < raio * 5 and abs(dy) < dx * 0.27:  # até ~15°
                 angulos.append(math.atan2(dy, dx))
-    return float(np.median(angulos)) if angulos else 0.0
+    return float(np.median(angulos)) if angulos else None
 
 
 def _agrupar(valores: list[float], tolerancia: float) -> list[list[int]]:
@@ -392,11 +446,16 @@ def detectar_layout(bolhas: list[Bolha]) -> tuple[Layout, list[list[list[Bolha]]
     if not bolhas:
         raise ErroLeitura("Nenhuma bolinha encontrada na folha.")
     raio = float(np.median([b.r for b in bolhas]))
-    angulo = estimar_inclinacao(bolhas, raio)
-    cos, sen = math.cos(-angulo), math.sin(-angulo)
-    # Coordenadas "desentortadas" usadas só para agrupar (a medição usa as reais)
-    xs = [b.x * cos - b.y * sen for b in bolhas]
-    ys = [b.x * sen + b.y * cos for b in bolhas]
+    ang_linhas = estimar_inclinacao(bolhas, raio) or 0.0
+    ang_colunas = estimar_inclinacao(bolhas, raio, vertical=True)
+    if ang_colunas is None:
+        ang_colunas = -ang_linhas
+    # Coordenadas "desentortadas" usadas só para agrupar (a medição usa as reais):
+    # x ao longo das linhas de bolinhas, y ao longo das colunas.
+    base = np.array([[math.cos(ang_linhas), math.sin(ang_colunas)],
+                     [math.sin(ang_linhas), math.cos(ang_colunas)]])
+    inversa = np.linalg.inv(base)
+    xs, ys = (inversa @ np.array([[b.x for b in bolhas], [b.y for b in bolhas]])).tolist()
 
     linhas = [g for g in _agrupar(ys, raio) if len(g) >= 2]
     colunas = _agrupar(xs, raio)
@@ -442,8 +501,8 @@ def detectar_layout(bolhas: list[Bolha]) -> tuple[Layout, list[list[list[Bolha]]
                 if c in achadas:
                     grupo.append(bolhas[achadas[c]])
                 else:  # volta da coordenada desentortada para a real
-                    xr, yr = cx[c], y_linha
-                    grupo.append(Bolha(xr * cos + yr * sen, -xr * sen + yr * cos, raio, estimada=True))
+                    xr, yr = base @ (cx[c], y_linha)
+                    grupo.append(Bolha(float(xr), float(yr), raio, estimada=True))
                     estimadas += 1
             questoes_bloco.append(grupo)
         if questoes_bloco:
@@ -471,7 +530,7 @@ def conferir_layout(detectado: Layout, esperado: Layout) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Medir preenchimento e decidir
+# 6. Medir preenchimento e decidir
 # ---------------------------------------------------------------------------
 
 def medir_preenchimento(folha: np.ndarray, bolha: Bolha, fundo: float) -> float:
@@ -485,26 +544,53 @@ def ler_folha(imagem_bgr: np.ndarray, layout: Layout | None = None) -> dict:
     """Lê uma folha. Sem `layout`, descobre o formato sozinho; com `layout`,
     confere se a folha tem o formato (e o caderno) esperado."""
     cinza = cv2.cvtColor(imagem_bgr, cv2.COLOR_BGR2GRAY) if imagem_bgr.ndim == 3 else imagem_bgr
-    caderno, qr = ler_qr(cinza)
+    normal = normalizar_iluminacao(cinza)
+
+    marcadores = localizar_marcadores(normal)
+    caderno, giro, girada, canto_estimado = None, 0, False, False
+    if marcadores:
+        cantos, lado, canto_estimado = marcadores
+        caderno, giro = ler_qr_acima(cinza, cantos)
+    if not caderno:
+        caderno, pontos_qr = ler_qr(cinza)
+        if caderno and marcadores:
+            giro = _giro_pelo_qr(cantos, pontos_qr)
+    giro = giro or 0
     if layout and layout.caderno and caderno and caderno != layout.caderno:
         raise ErroLeitura(f"Esta folha é do caderno {caderno}, e a prova é do caderno {layout.caderno}.")
 
-    alinhada = alinhar_por_marcadores(cinza, qr)
-    if alinhada:
-        folha, matriz, lado_marcador = alinhada
+    alinhada = None
+    if marcadores:
+        folha, matriz, lado_marcador = alinhar_por_marcadores(normal, cantos, lado, giro)
+        diametro = (0.45 * lado_marcador, 1.6 * lado_marcador)
         moldura = False
         try:
-            detectado, blocos, estimadas = detectar_layout(
-                detectar_bolhas(folha, (0.45 * lado_marcador, 1.6 * lado_marcador)))
+            detectado, blocos, estimadas = detectar_layout(detectar_bolhas(folha, diametro))
+            # Sem QR não se sabe o lado de cima. Na AMA os blocos menores ficam à
+            # direita (7, 7, 7, 5); se o menor está à esquerda, a folha está virada.
+            if not caderno and detectado.blocos[0] < detectado.blocos[-1]:
+                H, W = folha.shape
+                matriz = np.array([[-1, 0, W - 1], [0, -1, H - 1], [0, 0, 1]], dtype="float64") @ matriz
+                folha = cv2.rotate(folha, cv2.ROTATE_180)
+                detectado, blocos, estimadas = detectar_layout(detectar_bolhas(folha, diametro))
+                girada = True
             if layout:
                 conferir_layout(detectado, layout)
+            alinhada = True
         except ErroLeitura:
             if caderno:  # folha AMA de verdade: o erro vale
                 raise
-            alinhada = None  # 4 "marcadores" que não eram marcadores: tenta a moldura
+            # 4 "marcadores" que não eram marcadores: tenta a moldura
     if not alinhada:
         folha, moldura, matriz = localizar_folha(cinza)
-        detectado, blocos, estimadas = detectar_layout(detectar_bolhas(folha))
+        try:
+            detectado, blocos, estimadas = detectar_layout(detectar_bolhas(folha))
+        except ErroLeitura as e:
+            if moldura:
+                raise
+            raise ErroLeitura("Não encontrei os 4 quadrados pretos dos cantos da área de respostas "
+                              "(nem a moldura do modelo antigo). Fotografe a folha inteira, de frente, "
+                              "sem cobrir os cantos.") from e
         if layout:
             conferir_layout(detectado, layout)
 
@@ -548,8 +634,11 @@ def ler_folha(imagem_bgr: np.ndarray, layout: Layout | None = None) -> dict:
     motivos = []
     if not alinhada and not moldura:
         motivos.append("Não encontrei os marcadores dos cantos nem a moldura da folha.")
+    if alinhada and canto_estimado:
+        motivos.append("Um dos marcadores dos cantos não foi encontrado; a posição dele foi estimada.")
     if alinhada and not caderno:
-        motivos.append("Não consegui ler o QR code da folha.")
+        motivos.append("Não consegui ler o QR code da folha"
+                       + (" (o lado de cima foi deduzido pelos blocos)." if girada else "."))
     if layout and layout.caderno and not caderno:
         motivos.append("Sem o QR code, não foi possível conferir se a folha é do caderno da prova.")
     if estimadas:
@@ -558,6 +647,7 @@ def ler_folha(imagem_bgr: np.ndarray, layout: Layout | None = None) -> dict:
     return {
         "caderno": caderno,
         "marcadores_encontrados": bool(alinhada),
+        "girada": bool(giro) or girada,
         "moldura_encontrada": moldura,
         "layout": detectado.para_dict(),
         "confianca": {"nivel": "baixa" if motivos else "alta", "motivos": motivos},

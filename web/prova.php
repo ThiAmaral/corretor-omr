@@ -154,6 +154,7 @@ cabecalho($prova['nome'], 'index.php');
 ?>
 
 <p class="meta">
+  <?php if (!empty($layout['caderno'])): ?>Caderno <?= e($layout['caderno']) ?>. <?php endif; ?>
   <?= (int)$layout['questoes'] ?> questões, alternativas <?= e(implode(', ', $layout['alternativas'])) ?>.
   Gabarito: <span class="gabarito"><?= e(implode('', $gabarito)) ?></span>.
   Reforço indicado abaixo de <?= fmt_pct(LIMITE_REFORCO) ?> de acerto.

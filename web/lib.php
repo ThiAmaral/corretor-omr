@@ -212,7 +212,8 @@ function salvar_layout(int $provaId, array $layout): void
 
 /**
  * Chama o worker Python e devolve uma entrada por página lida:
- * ['arquivo', 'pagina', 'ok', 'erro'?, 'respostas'?, 'duvidosas'?, 'imagem_debug'?]
+ * ['arquivo', 'pagina', 'ok', 'erro'?, 'respostas'?, 'duvidosas'?, 'imagem_debug'?,
+ *  'caderno'?, 'layout'?, 'confianca'?]
  */
 function ler_folhas(array $arquivos, string $layoutJson, string $pastaDebug): array
 {

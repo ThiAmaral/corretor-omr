@@ -23,8 +23,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!isset(periodos()[$periodo])) {
             throw new InvalidArgumentException('Escolha o ' . PERIODO_ESCOLA . ' da prova.');
         }
-        if ($questoes < 1 || $colunas < 1 || $questoes % $colunas !== 0) {
-            throw new InvalidArgumentException('O número de questões precisa ser divisível pelo número de colunas.');
+        if ($questoes < 1 || $colunas < 1 || $colunas > $questoes) {
+            throw new InvalidArgumentException('Informe o número de questões e de colunas (blocos) da folha.');
         }
         if (count($alternativas) < 2) {
             throw new InvalidArgumentException('Informe ao menos duas alternativas, separadas por vírgula.');
@@ -74,6 +74,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     . implode(', ', $problemas) . ' ou digite o gabarito.');
             }
             $gabarito = respostas_da_leitura($leitura);
+            // Guarda o formato lido no gabarito; o caderno (QR) passa a ser
+            // conferido em cada folha de aluno.
+            $layout['blocos'] = $leitura['layout']['blocos'];
+            if (!empty($leitura['caderno'])) {
+                $layout['caderno'] = $leitura['caderno'];
+            }
+            salvar_layout($provaId, $layout);
         } else {
             throw new InvalidArgumentException('Envie a imagem do gabarito ou digite as respostas.');
         }
@@ -173,6 +180,8 @@ cabecalho('Provas');
       <label>Colunas <input type="number" name="colunas" min="1" value="<?= e($_POST['colunas'] ?? '2') ?>"></label>
       <label>Alternativas <input name="alternativas" value="<?= e($_POST['alternativas'] ?? 'A,B,C,D') ?>"></label>
     </div>
+    <p class="dica">Colunas com tamanhos diferentes são aceitas: a folha AMA tem 26 questões em 4 colunas (7, 7, 7 e 5).
+      Ao enviar o gabarito por foto, o sistema confere o formato e guarda o código do caderno lido no QR.</p>
     <label>Numeração
       <select name="ordem">
         <option value="colunas">Desce a primeira coluna (1 a 10), depois a segunda</option>
