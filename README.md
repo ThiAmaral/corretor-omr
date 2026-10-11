@@ -1,7 +1,9 @@
 # Corretor de provas — protótipo local
 
-Lê folhas de resposta digitalizadas, compara com o gabarito oficial e mostra a
-taxa de acerto por turma, por área e por questão. Nesta fase o sistema não
+Lê folhas de resposta digitalizadas ou fotografadas, compara com o gabarito
+oficial e mostra a taxa de acerto por turma, por área e por questão. Lê a folha
+da AMA (SEDU-ES / CAEd) e o modelo antigo do protótipo, e descobre sozinho o
+formato da folha (caderno, blocos de questões e alternativas). Nesta fase o sistema não
 identifica o aluno: a turma é informada no momento do envio das folhas.
 
 ## Estrutura
@@ -10,8 +12,11 @@ identifica o aluno: a turma é informada no momento do envio das folhas.
 web/        Backend + telas em PHP (cadastro da prova, envio, relatórios, revisão)
 worker/     Leitor óptico em Python/OpenCV (só lê a folha; não conhece o banco)
 ferramentas/ Gerador de folhas de teste e validador de precisão
-exemplos/   Gabarito real, layouts e folhas fictícias das turmas 7A e 7B
+exemplos/   Gabarito real, layouts e folhas fictícias das turmas 7A e 7B;
+            em exemplos/ama, a folha AMA em branco e fotos geradas a partir dela
 ```
+
+O andamento do plano de evolução fica em [PROGRESSO.md](PROGRESSO.md).
 
 A divisão já segue a arquitetura combinada: o PHP é dono do banco e da regra
 de correção; o Python só devolve "qual bolinha foi marcada". Hoje o PHP chama o
@@ -86,6 +91,17 @@ se ajustam sozinhos.
 
 ## Testar o fluxo completo
 
+### Com a folha AMA
+
+1. Em **Nova prova**, use 26 questões, 4 colunas, alternativas `A,B,C,D`
+   (as colunas podem ter tamanhos diferentes: a AMA tem 7, 7, 7 e 5).
+2. Envie `exemplos/ama/geradas_8A/gabarito.jpg` como gabarito. O sistema confere
+   o formato e guarda o código do caderno lido no QR (`2265M0801`).
+3. Na página da prova, envie as fotos `exemplos/ama/geradas_8A/8A_aluno*.jpg`
+   com a turma `8A`. Folhas de outro caderno são recusadas.
+
+### Com o modelo antigo
+
 1. Em **Nova prova**, use 20 questões, 2 colunas, alternativas `A,B,C,D`.
 2. Envie `exemplos/gabarito_oficial.png` como gabarito (ou digite `CCADCBCABADDBBCDCCCC`).
 3. Áreas: deixe em branco ou use `Linguagens: 1-10` e `Matemática: 11-20`.
@@ -99,6 +115,20 @@ e os relatórios são recalculados sem reenviar as folhas.
 
 ## Testar só o leitor (sem PHP)
 
+Descobrir o formato de uma folha (caderno, blocos, alternativas):
+
+```bash
+python worker/omr_cli.py detectar exemplos/ama/geradas_8A/gabarito.jpg
+```
+
+Corrigir uma turma usando o formato detectado no gabarito:
+
+```bash
+python worker/omr_cli.py corrigir --gabarito exemplos/ama/geradas_8A/gabarito.jpg --provas exemplos/ama/geradas_8A --turma 8A
+```
+
+Com um layout cadastrado (modelo antigo):
+
 ```bash
 python worker/omr_cli.py corrigir \
   --gabarito exemplos/gabarito_oficial.png \
@@ -107,13 +137,22 @@ python worker/omr_cli.py corrigir \
   --debug /tmp/anotadas
 ```
 
-Medir a precisão da leitura contra as respostas conhecidas:
+Medir a precisão da leitura contra as respostas conhecidas (sem `--layout`, o
+formato é detectado e o validador mede também caderno e blocos):
 
 ```bash
+python ferramentas/validar_leitura.py exemplos/ama/geradas_8A
 python ferramentas/validar_leitura.py exemplos/provas_7A --layout exemplos/layout_linguagens_matematica.json
 ```
 
-Gerar mais folhas fictícias (inclusive mais tortas):
+Gerar fotos fictícias da AMA a partir do PDF em branco (perspectiva, sombra,
+desfoque; `--invertidas 0.3` deixa 30% de cabeça para baixo):
+
+```bash
+python ferramentas/gerar_folhas_teste.py exemplos/ama/AMA_2026_M0801_folha_em_branco.pdf --turma 8B --alunos 30 --saida exemplos/ama/geradas_8B
+```
+
+Gerar mais folhas do modelo antigo (inclusive mais tortas):
 
 ```bash
 python ferramentas/gerar_folhas_teste.py exemplos/gabarito_oficial.png \
@@ -121,26 +160,44 @@ python ferramentas/gerar_folhas_teste.py exemplos/gabarito_oficial.png \
   --turma 8C --alunos 30 --rotacao 5 --saida exemplos/provas_8C --pdf
 ```
 
+Testes automatizados do leitor (casos de borda: folha virada, sem QR, sem um
+marcador, em branco, toda marcada, caderno errado):
+
+```bash
+pip install -r worker/requirements-dev.txt
+python -m pytest worker/testes -q
+```
+
 ## Como a leitura funciona
 
-1. Procura a moldura retangular da folha e corrige a perspectiva. Se a moldura
-   estiver cortada no scan, segue com a imagem inteira.
-2. Detecta as bolinhas pelo formato (círculos de tamanho parecido) e descarta
-   caixinhas quadradas e letras dos títulos.
-3. Estima a inclinação pelas linhas de bolinhas e monta a grade
-   linhas x colunas x alternativas, conforme o layout da prova.
-4. Mede o escurecimento de cada bolinha, calibrado pela própria folha
+1. Divide a imagem pelo próprio fundo, para tirar sombras e a cor da mesa.
+2. Procura os 4 quadrados pretos dos cantos da área de respostas (folha AMA).
+   Se só 3 aparecerem, estima o 4º.
+3. Lê o QR code na faixa acima da área de respostas: ele dá o código do
+   caderno e diz qual é o lado de cima (folha virada ou deitada). Sem QR, a
+   folha virada é reconhecida pelos blocos (o bloco menor fica à direita).
+4. Endireita a área entre os marcadores. Sem marcadores, procura a moldura do
+   modelo antigo e, se não achar, segue com a imagem inteira.
+5. Detecta as bolinhas pelo formato (círculos de tamanho parecido com o dos
+   marcadores) e descarta caixinhas quadradas e letras.
+6. Descobre o formato: colunas de bolinhas separadas por espaços pequenos são
+   alternativas; espaços grandes separam blocos de questões. Em cada bloco, as
+   questões descem de cima para baixo. Bolinhas não encontradas em uma questão
+   têm a posição estimada pela grade.
+7. Mede o escurecimento de cada bolinha, calibrado pela própria folha
    (bolinha vazia típica = 0, totalmente preenchida = 1).
    Acima de 0,50 conta como marcada; entre 0,25 e 0,65 vai para revisão.
+8. Devolve a confiança da leitura (`alta` ou `baixa`, com os motivos), para
+   pedir outra foto quando faltar QR, marcador ou bolinhas.
 
 ## Limitações conhecidas
 
-- O número de linhas e de bolinhas por linha precisa bater com o layout
-  cadastrado; se não bater, a folha aparece em "não puderam ser lidas" com o motivo.
-- As folhas de teste são simulações feitas a partir do gabarito real. Antes de
-  usar com a escola, rode o validador com algumas folhas reais digitalizadas
-  pelo scanner que vai ser usado e ajuste `LIMIAR_MARCADA` e `ZONA_DUVIDA` em
-  `worker/omr.py` se necessário.
+- Os blocos detectados precisam bater com o layout cadastrado, e o caderno do
+  QR com o da prova; se não baterem, a folha aparece em "não puderam ser lidas"
+  com o motivo.
+- As folhas de teste são simulações. Antes de usar com a escola, rode o
+  validador com fotos reais de folhas AMA preenchidas e ajuste `LIMIAR_MARCADA`
+  e `ZONA_DUVIDA` em `worker/omr.py` se necessário.
 - Sem autenticação nem proteção CSRF: é um protótipo para uso local.
 - No modelo impresso atual, a 4ª bolinha das questões 15, 17 e 19 está rotulada
   como "A". A leitura é por posição, então não afeta a correção, mas vale

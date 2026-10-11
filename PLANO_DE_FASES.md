@@ -136,7 +136,7 @@ PostgreSQL, tem acesso.
 
 **Objetivo:** ter controle de versão e material real para testar.
 
-- [ ] Rodar `git init`, subir um repositório privado no GitHub e fazer o
+- [x] Rodar `git init`, subir um repositório privado no GitHub e fazer o
       primeiro commit do estado atual.
 - [ ] **Juntar folhas AMA reais.** Guardar em `exemplos/ama/`, com um
       `respostas_esperadas.json` preenchido à mão para as folhas preenchidas.
@@ -159,6 +159,10 @@ AMA preenchidas, com as respostas conhecidas.
 ---
 
 ## Fase 1: leitor da folha AMA com detecção automática do formato
+
+> **Situação (2026-10-11):** implementada e validada com fotos **geradas**. Falta
+> só o critério das fotos reais, que depende da Fase 0. Detalhes, números e
+> pendências em [PROGRESSO.md](PROGRESSO.md#fase-1-leitor-da-folha-ama-com-detecção-automática-do-formato).
 
 **Objetivo:** ler a folha AMA por foto e descobrir sozinho o caderno, o número
 de questões, os blocos e as alternativas, sem nada digitado.

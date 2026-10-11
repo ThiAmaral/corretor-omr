@@ -1,0 +1,3 @@
+# Só para desenvolvimento: testes do leitor (python -m pytest worker/testes)
+-r requirements.txt
+pytest>=8
