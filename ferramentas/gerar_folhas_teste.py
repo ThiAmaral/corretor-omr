@@ -20,6 +20,9 @@ Uso:
 
   python ferramentas/gerar_folhas_teste.py exemplos/ama/AMA_2026_M0801_folha_em_branco.pdf \
       --turma 8A --alunos 20 --saida exemplos/ama/geradas_8A
+
+  # Fotos difíceis (Fase 5): papel curvado, sombra dura, desfoque e baixa resolução
+  python ferramentas/gerar_folhas_teste.py exemplos/ama/AMA_2026_M0801_folha_em_branco.pdf       --turma 8B --alunos 30 --curvatura 0.015 --sombra-dura 0.5 --desfoque 1 3       --resolucao 1200 2400 --saida exemplos/ama/dificeis_8B
 """
 import argparse
 import json
@@ -91,9 +94,43 @@ def simular_scanner(img, rotacao_max):
     return np.clip(img.astype(np.float32) + ruido + brilho, 0, 255).astype(np.uint8)
 
 
-def simular_foto(img, rotacao_max, invertida=False):
+def curvar_papel(img, amplitude):
+    """Papel curvado ou com dobra: as linhas da folha viram curvas. Desloca cada
+    ponto na vertical por um arco (folha abaulada) somado a uma onda (dobra),
+    com altura máxima de `amplitude` × altura da folha."""
+    h, w = img.shape[:2]
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    u, v = xx / w, yy / h
+    arco = random.choice([-1, 1]) * 4 * u * (1 - u)
+    onda = np.sin(2 * np.pi * (random.uniform(0.6, 1.4) * u + random.uniform(0, 1)))
+    peso = random.uniform(0.3, 0.7)
+    dy = amplitude * h * ((1 - peso) * arco + peso * onda) * (0.6 + 0.4 * v)
+    dx = 0.3 * amplitude * w * np.sin(np.pi * v) * random.choice([-1, 1]) * (u - 0.5)
+    return cv2.remap(img, xx + dx, yy + dy, cv2.INTER_LINEAR, borderValue=(255, 255, 255))
+
+
+def sombra_dura(foto):
+    """Sombra de borda nítida (mão ou celular entre a luz e a folha)."""
+    H, W = foto.shape[:2]
+    canto = random.choice([(0, 0), (W, 0), (W, H), (0, H)])
+    pts = np.array([canto,
+                    (random.uniform(0.2, 0.7) * W, canto[1]),
+                    (random.uniform(0.2, 0.7) * W, random.uniform(0.2, 0.7) * H),
+                    (canto[0], random.uniform(0.2, 0.7) * H)], np.int32)
+    mascara = np.zeros((H, W), np.float32)
+    cv2.fillPoly(mascara, [pts], 1.0)
+    mascara = cv2.GaussianBlur(mascara, (0, 0), random.uniform(2, 8))
+    return foto * (1 - random.uniform(0.35, 0.6) * mascara)[..., None]
+
+
+def simular_foto(img, rotacao_max, invertida=False, dificil=None):
     """Folha sobre uma mesa, fotografada de mão: perspectiva, giro, luz
-    desigual com sombra, desfoque, ruído e resolução de celular."""
+    desigual com sombra, desfoque, ruído e resolução de celular.
+    `dificil` (dict, opcional) piora a foto: desfoque=(mín, máx) do sigma,
+    resolucao=(mín, máx) do lado maior, curvatura=amplitude máxima, sombra_dura=prob."""
+    dificil = dificil or {}
+    if dificil.get("curvatura"):
+        img = curvar_papel(img, random.uniform(0.3, 1.0) * dificil["curvatura"])
     if invertida:
         img = cv2.rotate(img, cv2.ROTATE_180)
     h, w = img.shape[:2]
@@ -125,12 +162,14 @@ def simular_foto(img, rotacao_max, invertida=False):
     raio = random.uniform(0.25, 0.5) * max(W, H)
     luz *= 1.0 - random.uniform(0.0, 0.3) * np.exp(-((xx - sx) ** 2 + (yy - sy) ** 2) / (2 * raio ** 2))
     foto = foto * luz[..., None] * random.uniform(0.85, 1.05)
+    if random.random() < dificil.get("sombra_dura", 0):
+        foto = sombra_dura(foto)
 
-    foto = cv2.GaussianBlur(foto, (0, 0), random.uniform(0.6, 1.8))
+    foto = cv2.GaussianBlur(foto, (0, 0), random.uniform(*dificil.get("desfoque", (0.6, 1.8))))
     foto += np.random.normal(0, random.uniform(3, 8), foto.shape)
     foto = np.clip(foto, 0, 255).astype(np.uint8)
     # Resolução de celular: lado maior entre 1800 e 3000 px
-    alvo = random.randint(1800, 3000) / max(foto.shape[:2])
+    alvo = random.randint(*dificil.get("resolucao", (1800, 3000))) / max(foto.shape[:2])
     return cv2.resize(foto, None, fx=alvo, fy=alvo, interpolation=cv2.INTER_AREA)
 
 
@@ -195,7 +234,8 @@ def gerar_ama(a):
     esperado, paginas = {}, []
     for i in range(1, a.alunos + 1):
         sorteio = sortear_respostas(gabarito, layout.alternativas, random.uniform(0.35, 0.95))
-        foto = simular_foto(preencher(sorteio), a.rotacao, invertida=random.random() < a.invertidas)
+        foto = simular_foto(preencher(sorteio), a.rotacao, invertida=random.random() < a.invertidas,
+                            dificil=a.dificil)
         nome = f"{a.turma}_aluno{i:02d}.jpg"
         cv2.imwrite(os.path.join(a.saida, nome), foto, [cv2.IMWRITE_JPEG_QUALITY, random.randint(70, 90)])
         paginas.append(foto)
@@ -216,8 +256,18 @@ def main():
                    help="inclinação máxima da folha, em graus (padrão: 2.5 no protótipo, 8 na AMA)")
     p.add_argument("--invertidas", type=float, default=0.0,
                    help="AMA: fração de fotos de cabeça para baixo (0 a 1)")
+    p.add_argument("--desfoque", type=float, nargs=2, metavar=("MIN", "MAX"),
+                   help="AMA: faixa do desfoque (sigma, em px da foto antes de reduzir); padrão 0.6 1.8")
+    p.add_argument("--resolucao", type=int, nargs=2, metavar=("MIN", "MAX"),
+                   help="AMA: faixa do lado maior da foto, em px; padrão 1800 3000")
+    p.add_argument("--curvatura", type=float, default=0.0,
+                   help="AMA: papel curvado; deslocamento máximo em fração da altura (ex.: 0.015)")
+    p.add_argument("--sombra-dura", type=float, default=0.0,
+                   help="AMA: fração de fotos com sombra de borda nítida (0 a 1)")
     p.add_argument("--pdf", action="store_true", help="também junta as folhas em um PDF da turma")
     a = p.parse_args()
+    a.dificil = {k: v for k, v in {"desfoque": a.desfoque, "resolucao": a.resolucao,
+                                   "curvatura": a.curvatura, "sombra_dura": a.sombra_dura}.items() if v}
 
     random.seed(a.semente)
     np.random.seed(a.semente)

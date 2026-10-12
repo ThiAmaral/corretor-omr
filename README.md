@@ -225,6 +225,15 @@ desfoque; `--invertidas 0.3` deixa 30% de cabeça para baixo):
 python ferramentas/gerar_folhas_teste.py exemplos/ama/AMA_2026_M0801_folha_em_branco.pdf --turma 8B --alunos 30 --saida exemplos/ama/geradas_8B
 ```
 
+Fotos mais difíceis, para testar a leitura de celular: `--curvatura 0.015`
+(papel curvado ou dobrado), `--sombra-dura 0.5` (metade das fotos com sombra
+de borda nítida), `--desfoque 1 3` (faixa do desfoque) e `--resolucao 1200 2400`
+(faixa do lado maior da foto, em px):
+
+```bash
+python ferramentas/gerar_folhas_teste.py exemplos/ama/AMA_2026_M0801_folha_em_branco.pdf   --turma 8B --alunos 30 --curvatura 0.015 --sombra-dura 0.5 --desfoque 1 3   --resolucao 1200 2400 --saida exemplos/ama/dificeis_8B
+```
+
 Gerar mais folhas do modelo antigo (inclusive mais tortas):
 
 ```bash
@@ -234,7 +243,8 @@ python ferramentas/gerar_folhas_teste.py exemplos/gabarito_oficial.png \
 ```
 
 Testes automatizados do leitor (casos de borda: folha virada, sem QR, sem um
-marcador, em branco, toda marcada, caderno errado):
+marcador, em branco, toda marcada, caderno errado, foto desfocada, pequena
+demais ou escura, papel curvado):
 
 ```bash
 pip install -r worker/requirements-dev.txt
@@ -245,23 +255,49 @@ python -m pytest worker/testes -q
 
 1. Divide a imagem pelo próprio fundo, para tirar sombras e a cor da mesa.
 2. Procura os 4 quadrados pretos dos cantos da área de respostas (folha AMA).
-   Se só 3 aparecerem, estima o 4º.
-3. Lê o QR code na faixa acima da área de respostas: ele dá o código do
+   Eles precisam ser isolados (papel branco em volta), o que exclui os "olhos"
+   do QR code quando a foto está borrada. Se só 3 aparecerem, estima o 4º.
+3. Mede a qualidade da foto: brilho do papel, tamanho dos marcadores em pixels
+   e desfoque (largura da borda borrada dos marcadores ÷ lado deles). Foto
+   escura ou pequena demais é recusada na hora; desfocada recebe uma mensagem
+   própria se a leitura falhar.
+4. Lê o QR code na faixa acima da área de respostas: ele dá o código do
    caderno e diz qual é o lado de cima (folha virada ou deitada). Sem QR, a
    folha virada é reconhecida pelos blocos (o bloco menor fica à direita).
-4. Endireita a área entre os marcadores. Sem marcadores, procura a moldura do
+   Se o QR não sai de primeira, tenta de novo com mais nitidez.
+5. Endireita a área entre os marcadores. Sem marcadores, procura a moldura do
    modelo antigo e, se não achar, segue com a imagem inteira.
-5. Detecta as bolinhas pelo formato (círculos de tamanho parecido com o dos
+6. Detecta as bolinhas pelo formato (círculos de tamanho parecido com o dos
    marcadores) e descarta caixinhas quadradas e letras.
-6. Descobre o formato: colunas de bolinhas separadas por espaços pequenos são
+7. Descobre o formato: colunas de bolinhas separadas por espaços pequenos são
    alternativas; espaços grandes separam blocos de questões. Em cada bloco, as
-   questões descem de cima para baixo. Bolinhas não encontradas em uma questão
-   têm a posição estimada pela grade.
-7. Mede o escurecimento de cada bolinha, calibrado pela própria folha
+   questões descem de cima para baixo e são agrupadas com a inclinação do
+   próprio bloco (papel curvado). Bolinhas não encontradas em uma questão têm a
+   posição estimada pela grade; uma linha inteira que falte no meio do bloco é
+   recolocada pelo espaço entre as vizinhas.
+8. Mede o escurecimento de cada bolinha, calibrado pela própria folha
    (bolinha vazia típica = 0, totalmente preenchida = 1).
    Acima de 0,50 conta como marcada; entre 0,25 e 0,65 vai para revisão.
-8. Devolve a confiança da leitura (`alta` ou `baixa`, com os motivos), para
-   pedir outra foto quando faltar QR, marcador ou bolinhas.
+9. Devolve a confiança da leitura (`alta` ou `baixa`, com os motivos), para
+   pedir outra foto quando faltar QR, marcador ou bolinhas, ou quando a foto
+   estiver um pouco desfocada.
+
+### O que o leitor devolve
+
+Para cada página, `omr_cli.py ler` devolve um objeto JSON. Se a folha foi lida
+(`ok: true`):
+
+| Campo | Conteúdo |
+|---|---|
+| `caderno`, `layout` | Código do QR e formato detectado (blocos e alternativas) |
+| `respostas` | Por questão: `resposta`, `situacao` (`marcada`, `branco`, `multipla`), `duvidosa`, `niveis` (escurecimento de cada alternativa) e `bolinhas` (centro de cada alternativa na foto, de 0 a 1, em fração da largura e da altura) |
+| `raio_bolinha` | Raio típico das bolinhas, em fração da largura da foto |
+| `confianca` | `nivel` (`alta`/`baixa`) e `motivos` |
+| `qualidade` | `lado_marcador` (px), `desfoque`, `brilho` e `problema` (`null`, `pouca_resolucao` ou `desfocada`) |
+
+Se não foi lida (`ok: false`), vêm `erro` (a mensagem para o professor) e
+`codigo`: `escura`, `pouca_resolucao`, `desfocada`, `sem_marcadores`, `grade`,
+`formato_diferente`, `caderno_diferente` ou `arquivo`.
 
 ## Limitações conhecidas
 
@@ -270,7 +306,10 @@ python -m pytest worker/testes -q
   com o motivo.
 - As folhas de teste são simulações. Antes de usar com a escola, rode o
   validador com fotos reais de folhas AMA preenchidas e ajuste `LIMIAR_MARCADA`
-  e `ZONA_DUVIDA` em `worker/omr.py` se necessário.
+  e `ZONA_DUVIDA` em `worker/omr.py` se necessário. O mesmo vale para os limites
+  de qualidade (`DESFOQUE_MAXIMO`, `LADO_MINIMO`, `BRILHO_MINIMO`).
+- Sem QR legível, a leitura fica mais lenta (~2 s por folha, contra ~0,2 s),
+  por causa das novas tentativas com mais nitidez.
 - Sem autenticação nem proteção CSRF: é um protótipo para uso local. O login
   com Supabase Auth chega na Fase 6.
 - Cada questão tem uma disciplina só (tabela `questoes`).

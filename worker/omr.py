@@ -7,13 +7,15 @@ backend (PHP), para que a regra de correção fique em um lugar só.
 
 Etapas de ler_folha():
   1. Normaliza a iluminação e procura os 4 quadrados pretos dos cantos da área
-     de respostas (folha AMA).
+     de respostas (folha AMA). Mede a qualidade da foto (brilho, resolução,
+     desfoque) e recusa as que não dão para ler com segurança.
   2. Lê o QR code (código do caderno), que também indica o lado de cima.
   3. Endireita a área entre os marcadores. Sem marcadores, procura a moldura
      retangular (modelo do protótipo).
   4. Detecta as bolinhas (círculos vazios e preenchidos).
   5. Descobre os blocos de questões e organiza as bolinhas por questão.
   6. Mede o quanto cada bolinha está escurecida e decide a marcação.
+  7. Devolve também onde está cada bolinha na foto recebida (de 0 a 1).
 """
 from __future__ import annotations
 
@@ -35,11 +37,35 @@ ZONA_DUVIDA = (0.25, 0.65)  # leituras nesta faixa vão para revisão manual
 # quase todas as bolinhas marcadas seria calibrada como se marcada fosse vazia.
 BASE_MAXIMA = 0.50
 
+# Qualidade da foto (medida nos marcadores). O desfoque é a largura da borda
+# borrada (sigma, em px) dividida pelo lado do marcador, então não depende da
+# resolução. Calibrado com fotos simuladas: até ~0,06 nas fotos boas; acima de
+# ~0,07 o leitor começa a não achar os marcadores ou a grade.
+LADO_MINIMO = 10  # px; marcador menor que isso = foto pequena demais (já leu errado)
+LADO_BOM = 16  # px; abaixo disso, a borda borrada vem mais da resolução que do foco
+DESFOQUE_MAXIMO = 0.07
+BRILHO_MINIMO = 60  # tom do papel (0-255) abaixo do qual a foto está escura demais
+
 LETRAS = "ABCDEFGHIJ"
+
+MENSAGENS = {
+    "escura": "A foto está escura demais. Fotografe num lugar mais iluminado, sem sombra sobre a folha.",
+    "pouca_resolucao": "A foto tem pouca resolução. Aproxime o celular até a folha ocupar quase toda "
+                       "a tela e tire outra foto.",
+    "desfocada": "A foto está tremida ou fora de foco. Segure o celular firme, toque na folha para "
+                 "focar e tire outra foto.",
+}
 
 
 class ErroLeitura(Exception):
-    """Folha que não pôde ser lida (ex.: grade de bolinhas não encontrada)."""
+    """Folha que não pôde ser lida (ex.: grade de bolinhas não encontrada).
+    `codigo` diz o tipo do problema, para o app reagir sem interpretar o texto:
+    arquivo, grade, sem_marcadores, formato_diferente, caderno_diferente,
+    escura, pouca_resolucao, desfocada."""
+
+    def __init__(self, mensagem: str, codigo: str = "grade"):
+        super().__init__(mensagem)
+        self.codigo = codigo
 
 
 def blocos_iguais(questoes: int, colunas: int) -> list[int]:
@@ -108,12 +134,12 @@ def carregar_paginas(caminho: str) -> list[np.ndarray]:
         try:
             from pdf2image import convert_from_path
         except ImportError as e:
-            raise ErroLeitura("Para ler PDF instale pdf2image e poppler-utils.") from e
+            raise ErroLeitura("Para ler PDF instale pdf2image e poppler-utils.", "arquivo") from e
         paginas = convert_from_path(caminho, dpi=200)
         return [cv2.cvtColor(np.array(p.convert("RGB")), cv2.COLOR_RGB2BGR) for p in paginas]
     img = cv2.imread(caminho)
     if img is None:
-        raise ErroLeitura(f"Não foi possível abrir a imagem: {caminho}")
+        raise ErroLeitura(f"Não foi possível abrir a imagem: {caminho}", "arquivo")
     return [img]
 
 
@@ -129,7 +155,9 @@ def normalizar_iluminacao(cinza: np.ndarray) -> np.ndarray:
     peq = cv2.resize(cinza, None, fx=esc, fy=esc, interpolation=cv2.INTER_AREA)
     k = int(0.05 * 800) | 1  # maior que marcadores e bolinhas
     fundo = cv2.morphologyEx(peq, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
-    fundo = cv2.resize(cv2.GaussianBlur(fundo, (k, k), 0), (w, h), interpolation=cv2.INTER_LINEAR)
+    # Suavização curta: o fundo acompanha a borda nítida de uma sombra (mão, celular).
+    suave = (k // 2) | 1
+    fundo = cv2.resize(cv2.GaussianBlur(fundo, (suave, suave), 0), (w, h), interpolation=cv2.INTER_LINEAR)
     return np.clip(cinza.astype(np.float32) / np.maximum(fundo, 1) * 255, 0, 255).astype(np.uint8)
 
 
@@ -138,6 +166,17 @@ def _ordenar_cantos(pts: np.ndarray) -> np.ndarray:
     s = pts.sum(axis=1)
     d = np.diff(pts, axis=1).ravel()
     return np.array([pts[np.argmin(s)], pts[np.argmin(d)], pts[np.argmax(s)], pts[np.argmax(d)]], dtype="float32")
+
+
+def _escuro_em_volta(binaria: np.ndarray, cx: float, cy: float, r0: float, r1: float) -> float:
+    """Fração de pixels escuros no anel quadrado entre as distâncias r0 e r1 do centro."""
+    h, w = binaria.shape
+    x0, x1 = max(0, int(cx - r1)), min(w, int(cx + r1) + 1)
+    y0, y1 = max(0, int(cy - r1)), min(h, int(cy + r1) + 1)
+    yy, xx = np.mgrid[y0:y1, x0:x1]
+    dist = np.maximum(np.abs(xx - cx), np.abs(yy - cy))
+    anel = (dist > r0) & (dist <= r1)
+    return float(np.count_nonzero(binaria[y0:y1, x0:x1][anel]) / max(np.count_nonzero(anel), 1))
 
 
 def _candidatos_marcador(normal: np.ndarray) -> list[tuple[float, float, float]]:
@@ -166,13 +205,12 @@ def _candidatos_marcador(normal: np.ndarray) -> list[tuple[float, float, float]]
         cv2.drawContours(mascara, [c - [x, y]], -1, 255, -1)
         if cv2.mean(binaria[y:y + ch, x:x + cw], mask=mascara)[0] < 0.85 * 255:
             continue
-        # ...e isolado: em volta dele o papel é quase todo branco.
-        m = max(cw, ch) // 2
-        x0, y0, x1, y1 = max(0, x - m), max(0, y - m), min(w, x + cw + m), min(h, y + ch + m)
-        escuro_volta = cv2.countNonZero(binaria[y0:y1, x0:x1]) - cv2.countNonZero(binaria[y:y + ch, x:x + cw])
-        if escuro_volta > 0.25 * ((x1 - x0) * (y1 - y0) - cw * ch):
+        # ...e isolado: num anel em volta dele (até um lado além da borda) o
+        # papel é branco. Exclui o "olho" do QR code, que tem módulos em volta.
+        lado = math.sqrt(area)
+        if _escuro_em_volta(binaria, cx, cy, 0.85 * lado, 2.0 * lado) > 0.08:
             continue
-        candidatos.append((cx, cy, math.sqrt(area)))
+        candidatos.append((cx, cy, lado))
     return candidatos
 
 
@@ -198,7 +236,13 @@ def localizar_marcadores(normal: np.ndarray):
     dedo ou uma dobra cobrindo um canto), o 4º é estimado completando o
     paralelogramo. Devolve (cantos tl, tr, br, bl; lado médio do marcador;
     se um canto foi estimado) ou None."""
-    candidatos = sorted(_candidatos_marcador(normal), key=lambda c: -c[2])[:24]
+    candidatos = _candidatos_marcador(normal)
+    # Os marcadores ficam longe uns dos outros. Quadrados pretos em grupo são
+    # outra coisa: em foto desfocada, os 3 "olhos" do QR viram quadrados cheios.
+    candidatos = [c for c in candidatos
+                  if not any(o is not c and math.hypot(o[0] - c[0], o[1] - c[1]) < 4 * max(o[2], c[2])
+                             for o in candidatos)]
+    candidatos = sorted(candidatos, key=lambda c: -c[2])[:24]
     area_minima = 0.08 * normal.size  # a área de respostas não é minúscula
     melhor, melhor_area = None, area_minima
     for combo in itertools.combinations(candidatos, 4):
@@ -248,6 +292,62 @@ def _transformacao(cantos: np.ndarray):
 
 
 # ---------------------------------------------------------------------------
+# Qualidade da foto
+# ---------------------------------------------------------------------------
+
+def estimar_desfoque(cinza: np.ndarray, mascara: np.ndarray | None = None) -> float | None:
+    """Largura da borda borrada (sigma da gaussiana, em px), medida nas bordas
+    fortes. Numa borda de contraste C borrada com sigma s, o gradiente máximo é
+    C / (s·√(2π)); então s = C / (gradiente máximo · √(2π)). Usa o quartil de
+    baixo, que vem das bordas mais nítidas (as do papel impresso, não as sombras)."""
+    g = cinza.astype(np.float32)
+    grad = np.hypot(cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)) / 8
+    k = np.ones((9, 9), np.uint8)
+    contraste = cv2.dilate(g, k) - cv2.erode(g, k)
+    bordas = (grad >= cv2.dilate(grad, np.ones((3, 3), np.uint8))) & (contraste > 80)
+    if mascara is not None:
+        bordas &= mascara
+    if np.count_nonzero(bordas) < 30:
+        return None
+    sigmas = contraste[bordas] / (math.sqrt(2 * math.pi) * np.maximum(grad[bordas], 1e-3))
+    return float(np.percentile(sigmas, 25))
+
+
+def avaliar_qualidade(cinza: np.ndarray, marcadores) -> dict:
+    """Mede brilho, resolução e desfoque da foto. Com os marcadores achados,
+    mede o desfoque nas bordas deles; sem eles, na foto inteira, supondo que a
+    folha ocupa a foto (marcador ≈ 1,3% do lado maior).
+    `problema` é None ou um dos códigos de MENSAGENS."""
+    h, w = cinza.shape
+    if marcadores:
+        cantos, lado, _ = marcadores
+        mascara = np.zeros((h, w), bool)
+        for x, y in cantos:
+            mascara[max(0, int(y - lado)):int(y + lado), max(0, int(x - lado)):int(x + lado)] = True
+        sigma = estimar_desfoque(cinza, mascara)
+    else:
+        lado = 0.013 * max(h, w)
+        sigma = estimar_desfoque(cinza)
+    desfoque = sigma / lado if sigma else None
+    brilho = float(np.percentile(cinza, 95))
+
+    problema = None
+    if brilho < BRILHO_MINIMO:
+        problema = "escura"
+    elif lado < LADO_MINIMO:
+        problema = "pouca_resolucao"
+    elif desfoque and desfoque > DESFOQUE_MAXIMO:
+        problema = "pouca_resolucao" if lado < LADO_BOM else "desfocada"
+    return {
+        "lado_marcador": round(float(lado), 1),
+        "desfoque": round(desfoque, 3) if desfoque else None,
+        "brilho": round(brilho),
+        "medida_nos_marcadores": bool(marcadores),
+        "problema": problema,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 2. QR code
 # ---------------------------------------------------------------------------
 
@@ -288,9 +388,17 @@ def ler_qr_acima(cinza: np.ndarray, cantos: np.ndarray) -> tuple[str | None, int
         T = np.array([[s, 0, 0.05 * larg], [0, s, faixa], [0, 0, 1]]) @ M
         recorte = cv2.warpPerspective(cinza, T, (int(1.1 * larg), int(faixa)),
                                       flags=cv2.INTER_CUBIC, borderValue=255)
-        texto, _ = _decodificar_qr(recorte, (1.0, 0.5))
-        if texto:
-            return texto, giro
+        # Se não sair de primeira, tenta com mais nitidez (foto um pouco borrada).
+        borrado = None
+        for reforco in (0, 1.5, 3):
+            if reforco:
+                borrado = cv2.GaussianBlur(recorte, (0, 0), 3) if borrado is None else borrado
+                img = cv2.addWeighted(recorte, 1 + reforco, borrado, -reforco, 0)
+            else:
+                img = recorte
+            texto, _ = _decodificar_qr(img, (1.0, 0.5))
+            if texto:
+                return texto, giro
     return None, None
 
 
@@ -487,21 +595,54 @@ def detectar_layout(bolhas: list[Bolha]) -> tuple[Layout, list[list[list[Bolha]]
         for i in c:
             coluna_de[i] = i_col
 
+    # As linhas (questões) são agrupadas dentro de cada bloco, com a inclinação
+    # do próprio bloco: no papel curvado, a mesma linha muda de altura e de
+    # ângulo de um bloco para outro.
+    blocos_linhas = []  # por bloco: (base, x de cada coluna, sub, [(y da linha, achadas)])
+    for cols in blocos_cols:
+        indices = [i for c in cols for i in colunas[c]]
+        sub = [bolhas[i] for i in indices]
+        ang_l = estimar_inclinacao(sub, raio)
+        ang_c = estimar_inclinacao(sub, raio, vertical=True)
+        ang_l = ang_linhas if ang_l is None else ang_l
+        ang_c = ang_colunas if ang_c is None else ang_c
+        base_b = np.array([[math.cos(ang_l), math.sin(ang_c)],
+                           [math.sin(ang_l), math.cos(ang_c)]])
+        xb, yb = (np.linalg.inv(base_b) @ np.array([[b.x for b in sub], [b.y for b in sub]])).tolist()
+        x_col = {c: float(np.mean([xb[k] for k, i in enumerate(indices) if coluna_de[i] == c])) for c in cols}
+        linhas_b = []
+        for linha in _agrupar(yb, raio):
+            achadas = {coluna_de[indices[k]]: k for k in linha}
+            if len(achadas) >= math.ceil(n_alt / 2):
+                linhas_b.append((float(np.mean([yb[k] for k in achadas.values()])), achadas))
+        blocos_linhas.append((cols, base_b, x_col, sub, linhas_b))
+
+    # Uma linha com poucas bolinhas achadas (foto ruim) seria descartada e as
+    # questões seguintes mudariam de número. Pelo espaço entre as linhas vizinhas
+    # (o dobro do normal), ela é recolocada com as bolinhas estimadas.
+    passos = [b[0] - a[0] for *_, linhas_b in blocos_linhas for a, b in zip(linhas_b, linhas_b[1:])]
+    passo_linha = float(np.median(passos)) if passos else None
+
     estimadas = 0
     grade: list[list[list[Bolha]]] = []
-    for cols in blocos_cols:
+    for cols, base_b, x_col, sub, linhas_b in blocos_linhas:
+        completas = []
+        for j, (y_linha, achadas) in enumerate(linhas_b):
+            if j and passo_linha:
+                vao = y_linha - linhas_b[j - 1][0]
+                faltam = round(vao / passo_linha) - 1
+                if 1 <= faltam <= 2 and abs(vao / passo_linha - round(vao / passo_linha)) < 0.25:
+                    completas += [(linhas_b[j - 1][0] + k * vao / (faltam + 1), {}) for k in range(1, faltam + 1)]
+            completas.append((y_linha, achadas))
+
         questoes_bloco = []
-        for linha in linhas:
-            achadas = {coluna_de[i]: i for i in linha if coluna_de.get(i) in cols}
-            if len(achadas) < math.ceil(n_alt / 2):
-                continue
-            y_linha = float(np.mean([ys[i] for i in achadas.values()]))
+        for y_linha, achadas in completas:
             grupo = []
             for c in cols:
                 if c in achadas:
-                    grupo.append(bolhas[achadas[c]])
+                    grupo.append(sub[achadas[c]])
                 else:  # volta da coordenada desentortada para a real
-                    xr, yr = base @ (cx[c], y_linha)
+                    xr, yr = base_b @ (x_col[c], y_linha)
                     grupo.append(Bolha(float(xr), float(yr), raio, estimada=True))
                     estimadas += 1
             questoes_bloco.append(grupo)
@@ -525,7 +666,8 @@ def conferir_layout(detectado: Layout, esperado: Layout) -> None:
         raise ErroLeitura(
             f"Esperava blocos de {esperado.blocos} questões com {len(esperado.alternativas)} alternativas, "
             f"encontrei {detectado.blocos} com {len(detectado.alternativas)}. "
-            "Confira se a folha é desta prova ou tire outra foto."
+            "Confira se a folha é desta prova ou tire outra foto.",
+            "formato_diferente",
         )
 
 
@@ -542,11 +684,53 @@ def medir_preenchimento(folha: np.ndarray, bolha: Bolha, fundo: float) -> float:
 
 def ler_folha(imagem_bgr: np.ndarray, layout: Layout | None = None) -> dict:
     """Lê uma folha. Sem `layout`, descobre o formato sozinho; com `layout`,
-    confere se a folha tem o formato (e o caderno) esperado."""
+    confere se a folha tem o formato (e o caderno) esperado.
+
+    Antes, mede a qualidade da foto. Foto escura ou pequena demais é recusada
+    logo: ela chega a ser lida, mas com respostas erradas. Desfocada só muda a
+    mensagem quando a leitura falha, e baixa a confiança quando dá certo."""
     cinza = cv2.cvtColor(imagem_bgr, cv2.COLOR_BGR2GRAY) if imagem_bgr.ndim == 3 else imagem_bgr
     normal = normalizar_iluminacao(cinza)
-
     marcadores = localizar_marcadores(normal)
+    qualidade = avaliar_qualidade(cinza, marcadores)
+    problema = qualidade["problema"]
+    if problema == "escura" or (marcadores and qualidade["lado_marcador"] < LADO_MINIMO):
+        raise ErroLeitura(MENSAGENS[problema], problema)
+
+    try:
+        resultado = _ler_folha(cinza, normal, marcadores, layout)
+    except ErroLeitura as e:
+        if problema and e.codigo in ("grade", "sem_marcadores", "formato_diferente"):
+            raise ErroLeitura(MENSAGENS[problema], problema) from e
+        raise
+    if problema:
+        resultado["confianca"]["motivos"].append(
+            {"pouca_resolucao": "A foto tem pouca resolução",
+             "desfocada": "A foto está um pouco desfocada"}[problema] + "; confira a leitura.")
+        resultado["confianca"]["nivel"] = "baixa"
+    resultado["qualidade"] = qualidade
+    adicionar_posicoes(resultado, cinza.shape)
+    return resultado
+
+
+def adicionar_posicoes(resultado: dict, forma: tuple[int, int]) -> None:
+    """Põe em cada resposta o centro das bolinhas NA FOTO RECEBIDA, em fração da
+    largura e da altura (0 a 1), na ordem das alternativas, e em `raio_bolinha`
+    o raio típico em fração da largura. Assim o app desenha a leitura sobre a
+    própria foto, sem saber nada da área endireitada."""
+    h, w = forma
+    inversa = np.linalg.inv(resultado["_matriz"])
+    raios = []
+    for resp, grupo in zip(resultado["respostas"], resultado["_grade"]):
+        pts = np.array([[[b.x, b.y]] for b in grupo] + [[[b.x + b.r, b.y]] for b in grupo], dtype="float64")
+        na_foto = cv2.perspectiveTransform(pts, inversa).reshape(-1, 2)
+        centros, bordas = na_foto[:len(grupo)], na_foto[len(grupo):]
+        raios += [float(np.linalg.norm(bd - c)) for c, bd in zip(centros, bordas)]
+        resp["bolinhas"] = [[round(float(x) / w, 4), round(float(y) / h, 4)] for x, y in centros]
+    resultado["raio_bolinha"] = round(float(np.median(raios)) / w, 4) if raios else None
+
+
+def _ler_folha(cinza: np.ndarray, normal: np.ndarray, marcadores, layout: Layout | None) -> dict:
     caderno, giro, girada, canto_estimado = None, 0, False, False
     if marcadores:
         cantos, lado, canto_estimado = marcadores
@@ -557,7 +741,8 @@ def ler_folha(imagem_bgr: np.ndarray, layout: Layout | None = None) -> dict:
             giro = _giro_pelo_qr(cantos, pontos_qr)
     giro = giro or 0
     if layout and layout.caderno and caderno and caderno != layout.caderno:
-        raise ErroLeitura(f"Esta folha é do caderno {caderno}, e a prova é do caderno {layout.caderno}.")
+        raise ErroLeitura(f"Esta folha é do caderno {caderno}, e a prova é do caderno {layout.caderno}.",
+                          "caderno_diferente")
 
     alinhada = None
     if marcadores:
@@ -590,7 +775,7 @@ def ler_folha(imagem_bgr: np.ndarray, layout: Layout | None = None) -> dict:
                 raise
             raise ErroLeitura("Não encontrei os 4 quadrados pretos dos cantos da área de respostas "
                               "(nem a moldura do modelo antigo). Fotografe a folha inteira, de frente, "
-                              "sem cobrir os cantos.") from e
+                              "sem cobrir os cantos.", "sem_marcadores") from e
         if layout:
             conferir_layout(detectado, layout)
 

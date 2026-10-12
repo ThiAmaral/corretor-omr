@@ -173,6 +173,88 @@ def test_folha_toda_marcada(folha_branca):
     assert all(r["situacao"] == "multipla" for r in leitura["respostas"])
 
 
+# ---------------------------------------------------------------- Fotos de celular (Fase 5)
+
+def test_foto_boa_sem_problema_de_qualidade(gabarito_ama):
+    q = omr.ler_folha(gabarito_ama)["qualidade"]
+    assert q["problema"] is None
+    assert q["medida_nos_marcadores"]
+    assert q["desfoque"] < omr.DESFOQUE_MAXIMO
+    assert q["lado_marcador"] >= omr.LADO_BOM
+
+
+def test_foto_desfocada_nao_confunde_o_qr_com_marcador(gabarito_ama):
+    """Borrados, os "olhos" do QR viram quadrados cheios parecidos com os marcadores."""
+    cinza = cv2.cvtColor(gabarito_ama, cv2.COLOR_BGR2GRAY)
+    certos, lado, _ = omr.localizar_marcadores(omr.normalizar_iluminacao(cinza))
+    borrada = cv2.GaussianBlur(gabarito_ama, (0, 0), 2.5)
+    cantos, _, _ = omr.localizar_marcadores(omr.normalizar_iluminacao(cv2.cvtColor(borrada, cv2.COLOR_BGR2GRAY)))
+    assert np.abs(cantos - certos).max() < lado
+    assert respostas(omr.ler_folha(borrada)) == esperado_ama()["gabarito"]
+
+
+def test_foto_muito_desfocada_pede_outra_foto(gabarito_ama):
+    with pytest.raises(omr.ErroLeitura, match="tremida ou fora de foco") as erro:
+        omr.ler_folha(cv2.GaussianBlur(gabarito_ama, (0, 0), 7))
+    assert erro.value.codigo == "desfocada"
+
+
+def test_foto_pequena_demais_e_recusada(gabarito_ama):
+    pequena = cv2.resize(gabarito_ama, None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
+    with pytest.raises(omr.ErroLeitura, match="pouca resolução") as erro:
+        omr.ler_folha(pequena)
+    assert erro.value.codigo == "pouca_resolucao"
+
+
+def test_foto_escura_e_recusada(gabarito_ama):
+    escura = (gabarito_ama.astype(np.float32) * 0.15).astype(np.uint8)
+    with pytest.raises(omr.ErroLeitura, match="escura") as erro:
+        omr.ler_folha(escura)
+    assert erro.value.codigo == "escura"
+
+
+def test_papel_curvado(gabarito_ama):
+    import random
+    from gerar_folhas_teste import curvar_papel
+
+    random.seed(3)
+    leitura = omr.ler_folha(curvar_papel(gabarito_ama, 0.015))
+    assert leitura["layout"]["blocos"] == [7, 7, 7, 5]
+    assert respostas(leitura) == esperado_ama()["gabarito"]
+
+
+def test_linha_sem_bolinhas_achadas_e_recolocada(gabarito_ama):
+    """Sem nenhuma bolinha achada na questão 24, a linha volta pelo espaço entre
+    a 23 e a 25; as questões seguintes não mudam de número."""
+    leitura = omr.ler_folha(gabarito_ama)
+    h, w = gabarito_ama.shape[:2]
+    img = gabarito_ama
+    for x, y in leitura["respostas"][23]["bolinhas"]:
+        img = apagar_regiao(img, x * w, y * h, 1.4 * leitura["raio_bolinha"] * w)
+    leitura = omr.ler_folha(img)
+    assert leitura["layout"]["blocos"] == [7, 7, 7, 5]
+    esperado = esperado_ama()["gabarito"]
+    assert respostas(leitura) == esperado[:23] + [None] + esperado[24:]
+    assert leitura["confianca"]["nivel"] == "baixa"  # 4 bolinhas estimadas
+
+
+@pytest.mark.parametrize("girar", [False, True])
+def test_posicoes_das_bolinhas_na_foto(gabarito_ama, girar):
+    """As coordenadas (0 a 1) apontam para as bolinhas na foto recebida, mesmo
+    de cabeça para baixo: a marcada é escura e as outras, claras no centro."""
+    img = cv2.rotate(gabarito_ama, cv2.ROTATE_180) if girar else gabarito_ama
+    cinza = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    h, w = cinza.shape
+    leitura = omr.ler_folha(img)
+    assert 0 < leitura["raio_bolinha"] < 0.05
+    for r in leitura["respostas"]:
+        assert len(r["bolinhas"]) == 4
+        for letra, (x, y) in zip("ABCD", r["bolinhas"]):
+            assert 0 <= x <= 1 and 0 <= y <= 1
+            tom = cinza[int(y * h), int(x * w)]
+            assert (tom < 110) if letra == r["resposta"] else (tom > 110)
+
+
 # ---------------------------------------------------------------- Modelo antigo
 
 def test_modelo_antigo_continua_funcionando():

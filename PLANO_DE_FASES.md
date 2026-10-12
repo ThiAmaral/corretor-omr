@@ -517,22 +517,30 @@ questões revisar e por quê.
 
 ## Fase 5: leitura confiável de fotos de celular
 
+> **Situação (2026-10-12):** concluída com fotos simuladas (curvadas, com sombra
+> dura, borradas, pequenas e escuras): nenhuma resposta errada sem aviso. A
+> calibração com fotos reais depende da Fase 0. Detalhes em
+> [PROGRESSO.md](PROGRESSO.md#fase-5-leitura-confiável-de-fotos-de-celular).
+
 **Objetivo:** fotos de celular trazem sombra, perspectiva forte, desfoque e
 papel curvado, problemas que o scanner não tem. Os marcadores da AMA resolvem a
 perspectiva; esta fase cuida do resto.
 
-- [ ] **Iluminação:** antes do limiar, dividir a imagem pelo seu próprio fundo
+- [x] **Iluminação:** antes do limiar, dividir a imagem pelo seu próprio fundo
       desfocado. Isso remove sombras e gradientes de luz.
-- [ ] **Qualidade da foto:** medir o desfoque (variância do Laplaciano) e a
+- [x] **Qualidade da foto:** medir o desfoque (variância do Laplaciano) e a
       resolução, e verificar se os 4 marcadores e o QR foram achados. Devolver
       mensagens claras como "foto tremida, tente de novo" ou "enquadre os 4
-      quadrados pretos", em vez de "encontrei 7 linhas".
-- [ ] **Papel curvado:** se as fotos reais mostrarem folhas dobradas, alinhar
+      quadrados pretos", em vez de "encontrei 7 linhas". *(O desfoque acabou
+      medido pela largura da borda dos marcadores: a variância do Laplaciano
+      mudava com a resolução e não separava fotos boas de ruins.)*
+- [x] **Papel curvado:** se as fotos reais mostrarem folhas dobradas, alinhar
       cada bloco separadamente pelas próprias bolinhas, depois do alinhamento
       geral pelos marcadores.
 - [ ] **Calibração:** rodar `validar_leitura.py` com as fotos reais e ajustar
-      `LIMIAR_MARCADA` e `ZONA_DUVIDA`.
-- [ ] **Resposta para o app:** devolver as **coordenadas das bolinhas**
+      `LIMIAR_MARCADA` e `ZONA_DUVIDA`. *(Aguardando as fotos reais da Fase 0;
+      ajustar também os limites de qualidade.)*
+- [x] **Resposta para o app:** devolver as **coordenadas das bolinhas**
       (normalizadas de 0 a 1) junto com a leitura, para o app desenhar as
       marcações sobre a própria foto.
 

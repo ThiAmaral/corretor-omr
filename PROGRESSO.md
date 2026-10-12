@@ -15,7 +15,7 @@ Legenda: ✅ feito · 🔄 em andamento · ⏳ pendente · ⚠️ bloqueado / de
 | 2. Supabase | ✅ | Testado no projeto real (`xcmyknrojawmolnffltf`). Só o Docker não foi testado (não instalado nesta máquina) |
 | 3. Revisão do gabarito, áreas e dificuldade | ✅ | Testada no projeto real (migração aplicada pelo Thiago) |
 | 4. Relatórios por dificuldade | ✅ | Testada no projeto real com as provas de teste (2026-10-12) |
-| 5. Fotos de celular | ⏳ | Parte já adiantada na Fase 1 (ver abaixo) |
+| 5. Fotos de celular | ✅ (com fotos simuladas) | Falta calibrar com fotos reais (depende da Fase 0) |
 | 6. API e login | ⏳ | |
 | 7. App | ⏳ | |
 | 8. Piloto | ⏳ | |
@@ -435,3 +435,143 @@ de revisão: 1–9 Fácil, 10–18 Médio, 19–26 Difícil; habilidades D07 (1�
   do mapa sem cor (especificidade do CSS), título de grupo repetido quando não
   há nível, selo cortado na quebra de página da impressão. README e
   `docker-compose.yml` com os limites novos. Fase concluída.
+
+---
+
+## Fase 5: leitura confiável de fotos de celular
+
+Início: 2026-10-12.
+
+Objetivo: fotos de celular com sombra, perspectiva, desfoque e papel curvado
+são lidas corretamente, e as que não dão para ler voltam com uma mensagem que
+diz ao professor o que fazer.
+
+As fotos reais da Fase 0 ainda não chegaram. Por isso a fase é feita com fotos
+**simuladas** mais difíceis que as da Fase 1 (desfoque forte, baixa resolução,
+sombra dura, papel curvado). A calibração com fotos reais fica pendente.
+
+### Resultados
+
+Medidos com `ferramentas/validar_leitura.py`, formato detectado sozinho. Os
+conjuntos difíceis têm 30 fotos cada e não são versionados; para refazê-los,
+rodar `gerar_folhas_teste.py` sobre o PDF da AMA com `--alunos 30` e:
+
+| Conjunto | Opções do gerador | Antes da Fase 5 | Depois |
+|---|---|---|---|
+| Papel curvado | `--curvatura 0.015 --semente 1` | 96,3%; formato certo 27/30 | **100%**; 30/30 |
+| Sombra dura | `--sombra-dura 1 --semente 2` | 99,3%; caderno 28/30 | **99,6%** (3 bolinhas vazias mandadas para revisão); caderno 30/30 |
+| Desfoque forte (sigma 2–4) | `--desfoque 2 4 --semente 3` | 17,8%; 13/30 lidas, várias com o formato errado | **99,2%**; 30/30 lidas, formato certo (os 6 "erros" são letras certas mandadas para revisão); caderno 1 → 6/30 |
+| Baixa resolução (900–1500 px) | `--resolucao 900 1500 --semente 4` | 59,2%; 20/30 lidas | **100%**; 30/30; caderno 30/30 |
+| Além do limite: desfoque sigma 3,5–7 | `--desfoque 3.5 7 --semente 5` | — | 9/30 lidas, sem erro; 21 recusadas (20 com "foto tremida ou fora de foco") |
+| Além do limite: 500–950 px | `--resolucao 500 950 --semente 6` | — | 10/30 lidas, sem erro; 20 recusadas com "pouca resolução" |
+| `geradas_8A` (20 fotos da Fase 1) | — | 100%; caderno 19/20 | 100%; caderno 20/20 |
+| `geradas_8A` escurecidas (50% a 15% do brilho) | — | — | 0 erros; abaixo de ~30% recusadas com "escura demais" |
+| `provas_7A` / `provas_7B` (modelo antigo) | — | 100% / 100% | 100% / 100% |
+| `pytest` (`worker/testes`) | — | 18/18 | 27/27 |
+
+**Nenhuma resposta errada sem aviso** em todos esses conjuntos: o que não dá
+para ler com segurança é recusado com uma mensagem que diz o que fazer.
+
+Tempo: ~0,2 s por foto com QR legível; ~2,4 s quando o QR não é lido.
+
+### Itens
+
+| # | Item | Situação | Observação |
+|---|---|---|---|
+| 5.1 | Iluminação: dividir a imagem pelo fundo desfocado | ✅ | Feito na Fase 1 (`normalizar_iluminacao()`). Com sombra dura, o fundo passou a ser suavizado pela metade para acompanhar a borda da sombra: 99,3% → 99,6% (as diferenças eram bolinhas vazias mandadas para revisão, não erros) |
+| 5.2 | Qualidade da foto (desfoque, resolução, marcadores, QR) com mensagens claras | ✅ | `avaliar_qualidade()`: desfoque pela borda dos marcadores (sigma ÷ lado, não depende da resolução), lado do marcador em px e brilho do papel. Escura ou pequena demais: recusada. Desfocada: mensagem própria quando a leitura falha, confiança baixa quando dá certo. `ErroLeitura.codigo` vai no JSON do CLI, para o app. QR com nova tentativa mais nítida |
+| 5.3 | Papel curvado: alinhar cada bloco pelas próprias bolinhas | ✅ | As linhas (questões) são agrupadas dentro de cada bloco, com a inclinação do próprio bloco. Conjunto curvado: 96,3% → 100% |
+| 5.4 | Calibração de `LIMIAR_MARCADA` e `ZONA_DUVIDA` com fotos reais | ⚠️ | Depende da Fase 0 |
+| 5.5 | Coordenadas das bolinhas (0 a 1) na resposta, para o app | ✅ | `respostas[i].bolinhas` = centro de cada alternativa na foto recebida (fração da largura e da altura) e `raio_bolinha` (fração da largura). Conferido desenhando sobre as fotos, inclusive de cabeça para baixo e no modelo antigo |
+
+### Mudanças fora do previsto
+
+- **Marcadores errados em foto borrada ou pequena:** o maior problema achado
+  não estava na lista do plano. Os "olhos" do QR, borrados, passavam por
+  marcadores, e a folha era lida com o formato errado (respostas trocadas sem
+  aviso). Resolvido com um teste de isolamento mais rigoroso.
+- **Linha de questão perdida:** uma linha com poucas bolinhas achadas era
+  descartada e as questões seguintes mudavam de número. Agora é recolocada.
+- **Foto escura é recusada,** não só sinalizada: com pouca luz o leitor chegava
+  a trocar respostas.
+- **QR com nova tentativa** (mais nitidez) quando não sai de primeira.
+- **Gerador de fotos** com opções de foto difícil, e `ErroLeitura.codigo`.
+
+### Pendências e riscos
+
+- **Fotos reais (Fase 0).** Todos os limites foram calibrados em simulação:
+  `LIMIAR_MARCADA`, `ZONA_DUVIDA` (item 5.4) e os de qualidade
+  (`DESFOQUE_MAXIMO`, `LADO_MINIMO`, `LADO_BOM`, `BRILHO_MINIMO`). O critério
+  "99% das bolinhas das fotos reais" só pode ser conferido com elas.
+- **O desfoque simulado é gaussiano.** Foto tremida de verdade borra numa
+  direção só; a medida pela borda dos marcadores deve funcionar (pega o lado
+  mais nítido pelo quartil de baixo), mas convém conferir com fotos reais.
+- **Folha sem QR legível é ~10× mais lenta** (~2,4 s). Numa turma de 30 fotos
+  todas borradas, ~1 minuto. Se incomodar, dá para tentar o realce só na região
+  esperada do QR.
+- **Confiança e qualidade ainda não aparecem no painel web.** O PHP mostra a
+  mensagem de erro das folhas recusadas (já mais clara), mas não os avisos de
+  leitura com confiança baixa. Fica para a Fase 6 (API) e 7 (app), que vão usar
+  `qualidade`, `codigo` e as coordenadas.
+
+### Diário
+
+- **2026-10-12** — Fase iniciada. Lidos `omr.py`, `omr_cli.py`, o gerador de
+  fotos e o validador.
+- **2026-10-12** — Gerador com fotos mais difíceis: `--curvatura`, `--sombra-dura`,
+  `--desfoque` e `--resolucao`. Linha de base em 4 conjuntos de 30 fotos (não
+  versionados): curvado 96,3%, sombra dura 99,3%, desfoque forte 17,8%, baixa
+  resolução 59,2%. O pior: folhas **lidas com o formato errado** (ex.: blocos
+  `[5, 4]`), ou seja, respostas trocadas sem aviso.
+- **2026-10-12** — Causa no desfoque: os 3 "olhos" do QR code, borrados, viram
+  quadrados cheios e um deles era escolhido como marcador. Agora candidatos em
+  grupo (outro a menos de 4 lados) são descartados. Desfoque 17,8% → 78,9%
+  (24/30 lidas, todas com o formato certo), baixa resolução 59,2% → 89,4%.
+- **2026-10-12** — Papel curvado: linhas agrupadas por bloco. Curvado 100%,
+  30/30 com o formato certo. Conjuntos antigos sem mudança (`geradas_8A`,
+  `provas_7A`, `provas_7B`: 100%).
+- **2026-10-12** — Ainda havia marcadores errados quando só **um** olho do QR
+  vira candidato (foto pequena ou borrada). O teste de "isolado" passou a olhar
+  um anel mais largo em volta do candidato (até um lado além da borda, no
+  máximo 8% escuro): no marcador real o anel tem 0% de escuro; no olho do QR,
+  17–20%. Desfoque 78,9% → 99,2% (30/30 lidas; os 6 erros são letras certas
+  mandadas para revisão), baixa resolução 89,4% → 100% (30/30). `pytest` 18/18.
+- **2026-10-12** — Qualidade da foto. Os índices globais (variância do
+  Laplaciano) dependem da resolução e não separavam fotos boas de ruins. A
+  medida adotada é a largura da borda borrada dos marcadores dividida pelo lado
+  deles: até 0,062 em todas as fotos boas; a partir de ~0,067 as fotos borradas
+  deixam de ser lidas. Limites: `DESFOQUE_MAXIMO = 0,07`, `LADO_MINIMO = 10` px,
+  `LADO_BOM = 16` px, `BRILHO_MINIMO = 60`. Dois conjuntos "além do limite"
+  (desfoque sigma 3,5–7; foto de 500–950 px): 21 de 30 e 20 de 30 recusadas,
+  quase todas com a mensagem certa (`desfocada` / `pouca_resolucao`) em vez de
+  "não encontrei os 4 quadrados".
+- **2026-10-12** — Fotos escuras (brilho a 50%, 40%, 30%, 25%, 15%, com ruído):
+  apareceram **respostas trocadas sem aviso**. Causa: uma linha do bloco com
+  poucas bolinhas achadas era descartada, e as questões seguintes mudavam de
+  número. Agora, se o vão entre duas linhas é o dobro do normal, a linha que
+  falta é recolocada com as bolinhas estimadas. Foto escura passou a ser
+  recusada (como a pequena demais). Resultado: 0 respostas erradas em todos os
+  níveis; abaixo de ~30% de brilho a foto é recusada com "escura demais".
+- **2026-10-12** — Conferência geral: nenhuma resposta errada sem aviso nos 6
+  conjuntos difíceis; `geradas_8A`, `provas_7A` e `provas_7B` em 100%, sem alerta
+  de qualidade falso; `pytest` 18/18.
+- **2026-10-12** — Coordenadas das bolinhas na foto recebida (5.5), pela inversa
+  da matriz que endireita a área. `ErroLeitura` ganhou `codigo`, e o
+  `omr_cli.py` devolve esse código junto com a mensagem.
+- **2026-10-12** — Sombra dura: fundo estimado com metade da suavização (5 → 3
+  bolinhas vazias mandadas para revisão; nenhum outro conjunto mudou).
+- **2026-10-12** — QR em foto ruim: se não sai de primeira, tenta de novo com
+  mais nitidez. Caderno lido: sombra 28 → 30/30, baixa resolução 28 → 30/30,
+  `geradas_8A` 19 → 20/20, borradas 1 → 6/30. Custo: com QR, ~0,2 s por folha,
+  como antes; sem QR, ~2,4 s. Testada a versão mais barata (só na escala
+  reduzida: 1,5 s), mas ela perde leituras (borradas 6 → 2), então ficou a
+  completa.
+- **2026-10-12** — 9 testes `pytest` novos (27 no total, todos passando):
+  qualidade da foto boa, QR borrado não vira marcador, foto muito desfocada,
+  pequena demais e escura recusadas com o código certo, papel curvado, linha
+  sem bolinhas achadas recolocada, coordenadas na foto (normal e de cabeça para
+  baixo). O teste do QR borrado falha no `omr.py` anterior.
+- **2026-10-12** — README (etapas da leitura, formato da resposta, códigos de
+  erro, opções novas do gerador) e plano atualizados. Fase concluída com fotos
+  simuladas; 5.4 aguarda as fotos reais.
+

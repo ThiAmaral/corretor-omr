@@ -56,7 +56,7 @@ def ler_arquivos(arquivos, layout, pasta_debug=None):
         try:
             paginas = omr.carregar_paginas(arq)
         except omr.ErroLeitura as e:
-            saida.append({"arquivo": arq, "pagina": 1, "ok": False, "erro": str(e)})
+            saida.append({"arquivo": arq, "pagina": 1, "ok": False, "erro": str(e), "codigo": e.codigo})
             continue
         for n, img in enumerate(paginas, start=1):
             item = {"arquivo": arq, "pagina": n}
@@ -77,7 +77,7 @@ def ler_arquivos(arquivos, layout, pasta_debug=None):
                                 [cv2.IMWRITE_JPEG_QUALITY, 85])
                     item["imagem_recorte"] = recorte
             except omr.ErroLeitura as e:
-                item.update(ok=False, erro=str(e))
+                item.update(ok=False, erro=str(e), codigo=e.codigo)
             saida.append(item)
     return saida
 
