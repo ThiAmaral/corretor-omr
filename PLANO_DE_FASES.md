@@ -484,27 +484,30 @@ ajusta as respostas e marca a dificuldade de cada questão, tudo em uma tela só
 
 ## Fase 4: relatórios por dificuldade
 
+> **Situação (2026-10-12):** concluída. Testada no projeto real com as provas de
+> teste das Fases 2 e 3. Detalhes em [PROGRESSO.md](PROGRESSO.md#fase-4-relatórios-por-dificuldade).
+
 **Objetivo:** responder à pergunta central do TCC: em quais questões a turma
 precisa de revisão antes da prova oficial?
 
-- [ ] **Tabela de turmas:** colunas de acerto por nível (Fácil, Médio e Difícil),
+- [x] **Tabela de turmas:** colunas de acerto por nível (Fácil, Médio e Difícil),
       ao lado das colunas por disciplina.
-- [ ] **Lista "Prioridades de revisão"** por turma, ordenada por importância:
+- [x] **Lista "Prioridades de revisão"** por turma, ordenada por importância:
   - **Primeiro:** questões **fáceis ou médias com acerto baixo**. São conteúdos
     que a turma deveria dominar.
   - **Junto com elas:** o **erro comum** que já existe (a alternativa errada
     mais marcada), para o professor entender a confusão.
   - **Com habilidade cadastrada:** agrupar também por habilidade/descritor.
-- [ ] **Mapa de questões:** mostrar um selo de dificuldade em cada bolinha e
+- [x] **Mapa de questões:** mostrar um selo de dificuldade em cada bolinha e
       permitir filtrar por disciplina e por dificuldade.
-- [ ] **Dificuldade prevista × observada:**
+- [x] **Dificuldade prevista × observada:**
   - Calcular o índice de dificuldade (a proporção de acerto) e classificar a
     dificuldade observada. Usar faixas usuais, por exemplo acima de 70% = fácil
     e abaixo de 30% = difícil, configuráveis como o `LIMITE_REFORCO`.
   - Comparar com o nível que o professor marcou e destacar as questões em que
     os dois divergem.
   - Isso rende uma análise interessante para o texto do TCC.
-- [ ] **Exportação:** CSV e uma versão para impressão (CSS `@media print`) do
+- [x] **Exportação:** CSV e uma versão para impressão (CSS `@media print`) do
       relatório da turma, para levar à reunião pedagógica.
 
 **Pronto quando:** o professor abre a turma e vê em menos de um minuto quais

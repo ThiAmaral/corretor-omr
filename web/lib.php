@@ -11,11 +11,15 @@ declare(strict_types=1);
  * - Faz a correção: o Python só lê, quem compara com o gabarito é o PHP.
  */
 
+date_default_timezone_set('America/Sao_Paulo'); // datas no horário de Brasília
 define('RAIZ', dirname(__DIR__));
 carregar_env(RAIZ . '/.env');
 define('PYTHON', getenv('OMR_PYTHON') ?: 'python3');
 define('OMR_CLI', RAIZ . '/worker/omr_cli.py');
 define('LIMITE_REFORCO', (float)(getenv('LIMITE_REFORCO') ?: 60)); // % de acerto
+// Dificuldade observada pela proporção de acerto: acima de LIMITE_FACIL é fácil, abaixo de LIMITE_DIFICIL é difícil.
+define('LIMITE_FACIL', (float)(getenv('LIMITE_FACIL') ?: 70));
+define('LIMITE_DIFICIL', (float)(getenv('LIMITE_DIFICIL') ?: 30));
 define('PERIODO_ESCOLA', getenv('PERIODO_ESCOLA') ?: 'bimestre'); // bimestre, trimestre ou semestre
 
 // Todo texto recebido vira UTF-8 válido antes de chegar ao banco (ver utf8_valido()).
@@ -657,6 +661,222 @@ function corrigir(array $gabarito, array $respostas): array
         $acertos[] = ($respostas[$i] ?? null) === $certa;
     }
     return $acertos;
+}
+
+/* ------------------------------------------------------------ Relatório */
+
+/** Folhas da prova: [lidas, falhas]. As lidas já vêm corrigidas (acertos, n_acertos, taxa). */
+function carregar_folhas(array $prova): array
+{
+    $st = db()->prepare('SELECT * FROM folhas WHERE prova_id = ? ORDER BY turma, id');
+    $st->execute([$prova['id']]);
+    $lidas = $falhas = [];
+    foreach ($st->fetchAll() as $f) {
+        if ($f['erro'] !== null) {
+            $falhas[] = $f;
+            continue;
+        }
+        $f['respostas'] = json_decode($f['respostas'], true);
+        $f['revisar'] = json_decode($f['revisar'], true);
+        $lidas[] = corrigir_folha($f, $prova['gabarito']);
+    }
+    return [$lidas, $falhas];
+}
+
+/** Acrescenta à folha os acertos por questão, o total de acertos e a taxa. */
+function corrigir_folha(array $folha, array $gabarito): array
+{
+    $folha['acertos'] = corrigir($gabarito, $folha['respostas']);
+    $folha['n_acertos'] = count(array_filter($folha['acertos']));
+    $folha['taxa'] = pct($folha['n_acertos'], count($gabarito));
+    return $folha;
+}
+
+/** Nível pela proporção de acerto (índice de dificuldade clássico), ou null sem folhas. */
+function dificuldade_observada(?float $taxa): ?string
+{
+    if ($taxa === null) {
+        return null;
+    }
+    return $taxa > LIMITE_FACIL ? 'facil' : ($taxa < LIMITE_DIFICIL ? 'dificil' : 'medio');
+}
+
+/** Questão sem disciplina (provas antigas, sem áreas) conta como "Geral". */
+function disciplina_da_questao(array $q): string
+{
+    return $q['disciplina'] !== null && $q['disciplina'] !== '' ? $q['disciplina'] : 'Geral';
+}
+
+/** Níveis de dificuldade usados na prova, na ordem Fácil, Médio, Difícil. */
+function niveis_da_prova(array $questoes): array
+{
+    $usados = array_column($questoes, 'dificuldade');
+    return array_values(array_filter(array_keys(DIFICULDADES), fn($n) => in_array($n, $usados, true)));
+}
+
+/**
+ * Resumo por turma: folhas, acerto geral, alunos para reforço, folhas a revisar e acerto
+ * por disciplina e por nível de dificuldade ([acertos, respostas] em cada grupo).
+ */
+function resumo_por_turma(array $questoes, array $folhas): array
+{
+    $resumo = [];
+    foreach ($folhas as $f) {
+        $t = $f['turma'];
+        $resumo[$t] ??= ['folhas' => 0, 'acertos' => 0, 'total' => 0, 'reforco' => 0, 'revisar' => 0,
+            'disciplinas' => [], 'niveis' => []];
+        $r = &$resumo[$t];
+        $r['folhas']++;
+        $r['acertos'] += $f['n_acertos'];
+        $r['total'] += count($questoes);
+        $r['reforco'] += $f['taxa'] !== null && $f['taxa'] < LIMITE_REFORCO ? 1 : 0;
+        $r['revisar'] += $f['revisar'] ? 1 : 0;
+        foreach ($questoes as $i => $q) {
+            $certo = (int)($f['acertos'][$i] ?? false);
+            $d = disciplina_da_questao($q);
+            $r['disciplinas'][$d] = [($r['disciplinas'][$d][0] ?? 0) + $certo, ($r['disciplinas'][$d][1] ?? 0) + 1];
+            if ($q['dificuldade'] !== null) {
+                $n = $q['dificuldade'];
+                $r['niveis'][$n] = [($r['niveis'][$n][0] ?? 0) + $certo, ($r['niveis'][$n][1] ?? 0) + 1];
+            }
+        }
+        unset($r);
+    }
+    ksort($resumo, SORT_NATURAL);
+    return $resumo;
+}
+
+/**
+ * Uma linha por questão, calculada sobre as folhas recebidas (uma turma ou todas):
+ * gabarito, disciplina, dificuldade marcada e observada, acerto e o erro comum
+ * (a alternativa errada mais marcada; branco e dupla não entram).
+ */
+function estatisticas_das_questoes(array $questoes, array $folhas): array
+{
+    $linhas = [];
+    foreach ($questoes as $i => $q) {
+        $acertos = $brancos = 0;
+        $erradas = [];
+        foreach ($folhas as $f) {
+            $r = $f['respostas'][$i] ?? null;
+            if ($r === $q['resposta']) {
+                $acertos++;
+            } elseif ($r === null || $r === 'MULTIPLA') {
+                $brancos++;
+            } else {
+                $erradas[$r] = ($erradas[$r] ?? 0) + 1;
+            }
+        }
+        ksort($erradas);
+        arsort($erradas); // ordenação estável: no empate fica a primeira letra
+        $taxa = pct($acertos, count($folhas));
+        $observada = dificuldade_observada($taxa);
+        $habilidade = trim((string)($q['habilidade'] ?? ''));
+        $linhas[] = [
+            'numero' => (int)$q['numero'],
+            'certa' => $q['resposta'],
+            'disciplina' => disciplina_da_questao($q),
+            'dificuldade' => $q['dificuldade'],
+            'habilidade' => $habilidade !== '' ? $habilidade : null,
+            'alunos' => count($folhas),
+            'acertos' => $acertos,
+            'brancos' => $brancos,
+            'taxa' => $taxa,
+            'distrator' => $erradas ? array_key_first($erradas) : null,
+            'distrator_qtd' => $erradas ? reset($erradas) : 0,
+            'observada' => $observada,
+            'diverge' => $q['dificuldade'] !== null && $observada !== null && $q['dificuldade'] !== $observada,
+        ];
+    }
+    return $linhas;
+}
+
+/**
+ * Prioridades de revisão: questões com acerto abaixo do LIMITE_REFORCO, da mais urgente
+ * para a menos urgente. Primeiro as fáceis e médias (conteúdo que a turma deveria dominar),
+ * depois as sem nível marcado e por último as difíceis (acerto baixo já era esperado).
+ * Dentro de cada grupo, do menor acerto para o maior; no empate, a fácil vem antes.
+ */
+function prioridades_de_revisao(array $estatisticas): array
+{
+    $grupo = ['facil' => 0, 'medio' => 0, '' => 1, 'dificil' => 2];
+    $lista = array_values(array_filter($estatisticas, fn($e) => $e['taxa'] !== null && $e['taxa'] < LIMITE_REFORCO));
+    foreach ($lista as &$e) {
+        $e['grupo'] = $grupo[$e['dificuldade'] ?? ''];
+        $e['motivo'] = motivo_da_prioridade($e);
+    }
+    unset($e);
+    usort($lista, fn($a, $b) => [$a['grupo'], $a['taxa'], $a['dificuldade'] === 'medio', $a['numero']]
+        <=> [$b['grupo'], $b['taxa'], $b['dificuldade'] === 'medio', $b['numero']]);
+    return $lista;
+}
+
+/** "Marcada como fácil, mas só 35,0% acertaram. Erro comum: B (12 alunos)." */
+function motivo_da_prioridade(array $e): string
+{
+    $acerto = fmt_pct($e['taxa']);
+    $texto = match ($e['dificuldade']) {
+        'facil', 'medio' => 'Marcada como ' . mb_strtolower(DIFICULDADES[$e['dificuldade']]) . ", mas só $acerto acertaram.",
+        'dificil' => "Questão difícil: $acerto de acerto.",
+        default => "$acerto de acerto (sem nível marcado).",
+    };
+    if ($e['distrator'] !== null) {
+        $texto .= " Erro comum: {$e['distrator']} ({$e['distrator_qtd']} " . ($e['distrator_qtd'] === 1 ? 'aluno' : 'alunos') . ').';
+    }
+    if ($e['alunos'] > 0 && $e['brancos'] * 2 >= $e['alunos']) {
+        $texto .= " {$e['brancos']} em branco ou com marcação dupla.";
+    }
+    return $texto;
+}
+
+/**
+ * Acerto por habilidade (descritor), juntando as questões que a avaliam, do menor para o maior.
+ * Questões sem habilidade ficam de fora.
+ */
+function acerto_por_habilidade(array $estatisticas): array
+{
+    $grupos = [];
+    foreach ($estatisticas as $e) {
+        if ($e['habilidade'] === null) {
+            continue;
+        }
+        $h = $e['habilidade'];
+        $grupos[$h] ??= ['habilidade' => $h, 'questoes' => [], 'acertos' => 0, 'respostas' => 0];
+        $grupos[$h]['questoes'][] = $e['numero'];
+        $grupos[$h]['acertos'] += $e['acertos'];
+        $grupos[$h]['respostas'] += $e['alunos'];
+    }
+    foreach ($grupos as &$g) {
+        $g['taxa'] = pct($g['acertos'], $g['respostas']);
+    }
+    unset($g);
+    $grupos = array_values($grupos);
+    usort($grupos, fn($a, $b) => [$a['taxa'] ?? 101, $a['habilidade']] <=> [$b['taxa'] ?? 101, $b['habilidade']]);
+    return $grupos;
+}
+
+/**
+ * Dificuldade marcada pelo professor × observada nas folhas: [marcada][observada] => número de
+ * questões, só das que têm as duas. Cada questão divergente vem marcada em estatisticas_das_questoes().
+ */
+function matriz_de_dificuldade(array $estatisticas): array
+{
+    $niveis = array_keys(DIFICULDADES);
+    $matriz = array_fill_keys($niveis, array_fill_keys($niveis, 0));
+    foreach ($estatisticas as $e) {
+        if ($e['dificuldade'] !== null && $e['observada'] !== null) {
+            $matriz[$e['dificuldade']][$e['observada']]++;
+        }
+    }
+    return $matriz;
+}
+
+/** Filtros do mapa de questões por disciplina e dificuldade ('sem' = sem nível marcado); vazio = todas. */
+function filtrar_questoes(array $estatisticas, string $disciplina, string $dificuldade): array
+{
+    return array_values(array_filter($estatisticas, fn($e) =>
+        ($disciplina === '' || $e['disciplina'] === $disciplina)
+        && ($dificuldade === '' || ($e['dificuldade'] ?? 'sem') === $dificuldade)));
 }
 
 function upload_normalizado(array $campo): array

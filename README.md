@@ -1,7 +1,8 @@
 # Corretor de provas — protótipo local
 
 Lê folhas de resposta digitalizadas ou fotografadas, compara com o gabarito
-oficial e mostra a taxa de acerto por turma, por área e por questão. Lê a folha
+oficial e mostra a taxa de acerto por turma, por disciplina, por nível de
+dificuldade e por questão, com a lista de questões que cada turma precisa revisar. Lê a folha
 da AMA (SEDU-ES / CAEd) e o modelo antigo do protótipo, e descobre sozinho o
 formato da folha (caderno, blocos de questões e alternativas). Nesta fase o sistema não
 identifica o aluno: a turma é informada no momento do envio das folhas.
@@ -155,8 +156,31 @@ reenviar as folhas. Novos modelos de caderno (disciplina automática) entram em
 `modelos_de_prova()` no `web/lib.php`, e o catálogo de disciplinas em
 `disciplinas()`.
 
+## Relatórios
+
+Na página da prova, clique numa turma para ver:
+
+- **Turmas:** acerto geral, por disciplina e por nível (Fácil, Médio, Difícil).
+- **Prioridades de revisão:** questões abaixo do `LIMITE_REFORCO`, da mais
+  urgente para a menos urgente. Primeiro as marcadas como fáceis ou médias
+  (conteúdo que a turma deveria dominar), depois as sem nível e por último as
+  difíceis; em cada grupo, do menor acerto para o maior. Cada uma traz o motivo
+  e o erro comum (a alternativa errada mais marcada). Questões com habilidade
+  cadastrada (ex.: `D07`) também aparecem agrupadas por habilidade.
+- **Acerto por questão:** o mapa de bolinhas com a dificuldade marcada no canto,
+  filtrável por disciplina e por dificuldade.
+- **Dificuldade marcada × observada:** a observada vem da proporção de acerto
+  (acima de `LIMITE_FACIL`, 70%, é fácil; abaixo de `LIMITE_DIFICIL`, 30%, é
+  difícil). A tabela mostra em quantas questões o nível previsto se confirmou e
+  lista as que divergem.
+
+**Imprimir relatório** gera uma versão sem formulários nem a lista de folhas,
+para a reunião pedagógica. **CSV por questão** (da turma escolhida) e **CSV por
+turma** abrem no Excel em português. Os três limites são variáveis de ambiente,
+como no `docker-compose.yml`.
+
 Testes das regras do PHP (correção, revisão do gabarito, modelos de caderno,
-formato vindo da 1ª folha), sem banco:
+formato vindo da 1ª folha, resumos, prioridades e dificuldade observada), sem banco:
 
 ```bash
 php web/testes/regras.php

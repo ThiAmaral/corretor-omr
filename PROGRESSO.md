@@ -14,7 +14,7 @@ Legenda: ✅ feito · 🔄 em andamento · ⏳ pendente · ⚠️ bloqueado / de
 | 1. Leitor AMA com detecção do formato | ✅ (com fotos geradas) | Falta validar com fotos reais (depende da Fase 0) |
 | 2. Supabase | ✅ | Testado no projeto real (`xcmyknrojawmolnffltf`). Só o Docker não foi testado (não instalado nesta máquina) |
 | 3. Revisão do gabarito, áreas e dificuldade | ✅ | Testada no projeto real (migração aplicada pelo Thiago) |
-| 4. Relatórios por dificuldade | ⏳ | |
+| 4. Relatórios por dificuldade | ✅ | Testada no projeto real com as provas de teste (2026-10-12) |
 | 5. Fotos de celular | ⏳ | Parte já adiantada na Fase 1 (ver abaixo) |
 | 6. API e login | ⏳ | |
 | 7. App | ⏳ | |
@@ -354,3 +354,84 @@ recebido em `$_GET`/`$_POST` para UTF-8 (`utf8_valido()`), com teste.
   fixa no celular.
 - **2026-10-11** — Migração aplicada no projeto real pelo Thiago. Três cenários
   repetidos lá, com os mesmos números. Corrigido o texto recebido fora de UTF-8.
+
+---
+
+## Fase 4: relatórios por dificuldade
+
+Início: 2026-10-12.
+
+Objetivo: o professor abre a turma e vê em menos de um minuto quais questões
+revisar e por quê.
+
+### Itens
+
+| # | Item | Situação | Observação |
+|---|---|---|---|
+| 4.1 | Cálculos do relatório no `lib.php` (funções puras, testáveis) | ✅ | `carregar_folhas()`, `resumo_por_turma()`, `estatisticas_das_questoes()`, `prioridades_de_revisao()`, `acerto_por_habilidade()`, `matriz_de_dificuldade()`, `filtrar_questoes()`. Faixas `LIMITE_FACIL` (70) e `LIMITE_DIFICIL` (30) configuráveis como o `LIMITE_REFORCO` |
+| 4.2 | Tabela de turmas com acerto por nível (Fácil, Médio, Difícil) | ✅ | Colunas agrupadas "Por disciplina" e "Por dificuldade"; só aparecem os níveis usados na prova |
+| 4.3 | Lista "Prioridades de revisão" por turma, com erro comum e agrupada por habilidade | ✅ | Logo abaixo da tabela; clicar na turma leva direto a ela (`#prioridades`). Grupos "Conteúdo que a turma deveria dominar", "Sem nível" e "Difíceis", cada questão com o motivo em uma frase. Tabela "Habilidades com acerto baixo". Sem turma escolhida, soma todas |
+| 4.4 | Mapa de questões com selo de dificuldade e filtros por disciplina e dificuldade | ✅ | Letra F/M/D no canto da bolinha. Filtros por GET (funcionam sem JavaScript); o de disciplina só aparece com mais de uma |
+| 4.5 | Dificuldade prevista × observada (faixas configuráveis) | ✅ | Matriz 3×3 (marcada × observada), concordância em % e tabela das questões divergentes |
+| 4.6 | Exportação CSV e versão para impressão | ✅ | `exportar.php?tipo=questoes` (por turma ou todas) e `tipo=turmas`: `;`, vírgula decimal e BOM, para o Excel em português. Impressão por `@media print`, com data e turma no topo |
+| 4.7 | Testes PHP dos resumos e das prioridades | ✅ | 10 testes novos (29 no total), passando |
+| 4.8 | Teste de ponta a ponta (no projeto real) | ✅ | Ver abaixo. A Fase 4 só lê o banco, então não precisou do PostgreSQL local |
+
+### Teste no projeto real (2026-10-12)
+
+PHP sem Docker lendo o `.env`, como o `iniciar.cmd`. Para ter os três níveis,
+a dificuldade da prova 5 ("TESTE Fase 3 – AMA digitado") foi marcada pela tela
+de revisão: 1–9 Fácil, 10–18 Médio, 19–26 Difícil; habilidades D07 (1–4), D12
+(9–13) e D20 (17, 21, 25). Foi a única escrita no banco.
+
+| Cenário | Resultado |
+|---|---|
+| Prova 5, turma 8A | Acerto 63,1% (igual às Fases 2 e 3); Fácil 64,4%, Médio 60,6%, Difícil 64,4%. Prioridades: 17, 11, 9, 12, 13 (fáceis/médias) e 26, 21, 25 (difíceis). Habilidades D20 50,0% e D12 54,0% |
+| Marcada × observada (prova 5) | 7 de 26 no nível previsto (26,9%); 19 divergentes. As folhas geradas têm acerto parecido em todas as questões (40–85%), por isso quase tudo cai em "médio" |
+| Prova 4 (só 1–7 com nível) | Todas as prioridades no grupo "Sem nível"; 0 de 7 no nível previsto |
+| Prova 6 (várias disciplinas, sem nível) | 7A 61,3% (63,3% / 59,2%), 7B 61,5% (60,0% / 63,0%), iguais à Fase 3. Aviso para marcar a dificuldade; filtro de disciplina (Matemática → questões 11 a 20) |
+| Provas 1 e 2 (Fase 2, áreas antigas) | Abrem sem erro nem aviso do PHP |
+| CSV | Por questão da 8A e por turma da prova 6 abrem com acentos e vírgula decimal; tipo inválido dá 400 e prova inexistente, 404 |
+| Impressão (PDF pelo Edge sem interface) | 4 páginas: cabeçalho com turma e data, tabela, prioridades, mapa e comparação, com cores; sem formulário nem lista de folhas |
+| Celular (375 px) | Sem rolagem horizontal da página; cada prioridade em três linhas. As tabelas largas rolam dentro da seção, como antes |
+| `php web/testes/regras.php` | 29/29 |
+
+### Mudanças fora do previsto
+
+- **Fuso horário:** o PHP estava em UTC; o `lib.php` agora usa
+  `America/Sao_Paulo`, para a data do relatório impresso (e a "Criada em" da
+  lista de provas) saírem no horário local.
+- **Turma no filtro é conferida** com as turmas da prova; valor desconhecido
+  mostra todas.
+- **Sem nenhum nível marcado,** a página mostra um aviso com link para a revisão
+  do gabarito, e as prioridades ficam só por acerto.
+- **`.claude/launch.json`** criado para subir o PHP no painel do Claude
+  (mesmas opções do `iniciar.cmd`); não vai para o git.
+
+### Pendências e riscos
+
+- **Faixas de 70% e 30%:** são as usuais da Teoria Clássica dos Testes, mas
+  convém o orientador confirmar antes de citar no TCC. Mudam por
+  `LIMITE_FACIL` e `LIMITE_DIFICIL`, sem mexer no código.
+- **Folhas geradas não testam bem a comparação:** o acerto delas é parecido em
+  todas as questões. Com as folhas reais (Fase 0) a análise fica significativa.
+- **Dificuldade continua opcional** na aprovação. Com o relatório pronto, dá para
+  decidir se passa a ser exigida (uma linha em `validar_revisao()`).
+- **Prova 5 de teste** agora tem dificuldade e habilidades marcadas; ela continua
+  na lista de provas de teste a apagar antes do piloto.
+
+### Diário
+
+- **2026-10-12** — Fase iniciada. Lidos o `prova.php` (relatório atual: turmas
+  por disciplina, mapa de questões com erro comum, folhas) e o `lib.php`.
+- **2026-10-12** — Cálculos do relatório movidos para o `lib.php` como funções
+  sem banco, com 10 testes novos. Regra das prioridades: acerto abaixo do
+  `LIMITE_REFORCO`; primeiro fáceis e médias, depois sem nível, por último
+  difíceis; dentro do grupo, menor acerto primeiro.
+- **2026-10-12** — `prova.php` reescrito com as funções novas: tabela por
+  nível, prioridades (com habilidades), mapa com selo e filtros, comparação
+  marcada × observada. Novo `exportar.php` (CSV) e estilos de impressão.
+- **2026-10-12** — Teste no projeto real (provas 1, 2, 4, 5 e 6). Ajustes: selo
+  do mapa sem cor (especificidade do CSS), título de grupo repetido quando não
+  há nível, selo cortado na quebra de página da impressão. README e
+  `docker-compose.yml` com os limites novos. Fase concluída.

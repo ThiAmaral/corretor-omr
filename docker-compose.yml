@@ -5,5 +5,7 @@ services:
       - "8080:80"
     env_file: .env                 # DATABASE_URL, SUPABASE_URL e SUPABASE_SECRET_KEY (veja .env.exemplo)
     environment:
-      LIMITE_REFORCO: "60"
+      LIMITE_REFORCO: "60"         # % de acerto abaixo do qual a questão ou o aluno precisa de reforço
+      LIMITE_FACIL: "70"           # dificuldade observada: acima disto é fácil
+      LIMITE_DIFICIL: "30"         # e abaixo disto é difícil
       PERIODO_ESCOLA: "bimestre"   # bimestre, trimestre ou semestre

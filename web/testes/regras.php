@@ -208,4 +208,115 @@ teste('gabarito com alternativa que a folha não tem é recusado', function () {
         conferir_formato_da_folha($layout, leitura_ama(), $gab));
 });
 
+/* ------------------------------------------- Relatórios por dificuldade */
+
+/** Prova de 5 questões: 1–3 Matemática (fácil, fácil, médio), 4–5 Língua Portuguesa (difícil, sem nível). */
+function questoes_do_relatorio(): array
+{
+    $q = fn($n, $r, $d, $dif, $h) => ['numero' => $n, 'resposta' => $r, 'disciplina' => $d, 'dificuldade' => $dif, 'habilidade' => $h];
+    return [$q(1, 'A', 'Matemática', 'facil', 'D07'), $q(2, 'B', 'Matemática', 'facil', ' D07 '),
+        $q(3, 'C', 'Matemática', 'medio', ''), $q(4, 'D', 'Língua Portuguesa', 'dificil', 'D12'),
+        $q(5, 'A', 'Língua Portuguesa', null, null)];
+}
+
+/** Quatro alunos da 8A e um da 10A, já corrigidos. */
+function folhas_do_relatorio(): array
+{
+    $gab = array_column(questoes_do_relatorio(), 'resposta');
+    $f = fn($t, $r, $rev = []) => corrigir_folha(['turma' => $t, 'respostas' => $r, 'revisar' => $rev], $gab);
+    return [$f('8A', ['A', 'B', 'C', 'D', 'A']), $f('8A', ['B', 'B', 'A', null, 'A']),
+        $f('8A', ['B', 'C', 'A', 'C', 'MULTIPLA'], [5]), $f('8A', ['C', 'B', 'A', 'C', null]),
+        $f('10A', ['A', 'B', 'A', 'D', 'B'])];
+}
+
+function folhas_da_turma(string $turma): array
+{
+    return array_values(array_filter(folhas_do_relatorio(), fn($f) => $f['turma'] === $turma));
+}
+
+teste('dificuldade observada pelas faixas de acerto', function () {
+    igual('facil', dificuldade_observada(70.1));
+    igual('medio', dificuldade_observada(70.0));
+    igual('medio', dificuldade_observada(30.0));
+    igual('dificil', dificuldade_observada(29.9));
+    igual(null, dificuldade_observada(null));
+});
+
+teste('resumo por turma: acerto geral, por disciplina e por nível', function () {
+    $r = resumo_por_turma(questoes_do_relatorio(), folhas_do_relatorio());
+    igual(['8A', '10A'], array_keys($r)); // ordem natural das turmas
+    igual(4, $r['8A']['folhas']);
+    igual(40.0, pct($r['8A']['acertos'], $r['8A']['total']));
+    igual(3, $r['8A']['reforco']); // 40%, 0% e 20%
+    igual(1, $r['8A']['revisar']);
+    igual(['Matemática' => [5, 12], 'Língua Portuguesa' => [3, 8]], $r['8A']['disciplinas']);
+    igual(['facil' => [4, 8], 'medio' => [1, 4], 'dificil' => [1, 4]], $r['8A']['niveis']);
+    igual(['facil', 'medio', 'dificil'], niveis_da_prova(questoes_do_relatorio()));
+});
+
+teste('estatísticas por questão: acerto, erro comum, brancos e divergência', function () {
+    $e = estatisticas_das_questoes(questoes_do_relatorio(), folhas_da_turma('8A'));
+    igual([25.0, 75.0, 25.0, 25.0, 50.0], array_column($e, 'taxa'));
+    igual(['B', 'C', 'A', 'C', null], array_column($e, 'distrator'));
+    igual([2, 1, 3, 2, 0], array_column($e, 'distrator_qtd'));
+    igual([0, 0, 0, 1, 2], array_column($e, 'brancos'));
+    igual(['dificil', 'facil', 'dificil', 'dificil', 'medio'], array_column($e, 'observada'));
+    igual([true, false, true, false, false], array_column($e, 'diverge')); // sem nível marcado não diverge
+    igual(['D07', 'D07', null, 'D12', null], array_column($e, 'habilidade'));
+});
+
+teste('erro comum empatado fica com a primeira letra', function () {
+    $q = [['numero' => 1, 'resposta' => 'A', 'disciplina' => null, 'dificuldade' => null, 'habilidade' => null]];
+    $f = [['respostas' => ['C']], ['respostas' => ['B']]];
+    $e = estatisticas_das_questoes($q, $f)[0];
+    igual('B', $e['distrator']);
+    igual('Geral', $e['disciplina']);
+});
+
+teste('prioridades: fáceis e médias primeiro, depois sem nível, difíceis por último', function () {
+    $p = prioridades_de_revisao(estatisticas_das_questoes(questoes_do_relatorio(), folhas_da_turma('8A')));
+    igual([1, 3, 5, 4], array_column($p, 'numero')); // a 2 (75%) está acima do limite
+    igual('Marcada como fácil, mas só 25,0% acertaram. Erro comum: B (2 alunos).', $p[0]['motivo']);
+    igual('Marcada como médio, mas só 25,0% acertaram. Erro comum: A (3 alunos).', $p[1]['motivo']);
+    igual('50,0% de acerto (sem nível marcado). 2 em branco ou com marcação dupla.', $p[2]['motivo']);
+    igual('Questão difícil: 25,0% de acerto. Erro comum: C (2 alunos).', $p[3]['motivo']);
+});
+
+teste('prioridades: no mesmo grupo, menor acerto primeiro', function () {
+    $e = fn($n, $dif, $taxa) => ['numero' => $n, 'dificuldade' => $dif, 'taxa' => $taxa, 'alunos' => 10,
+        'brancos' => 0, 'distrator' => 'B', 'distrator_qtd' => 1];
+    $p = prioridades_de_revisao([$e(1, 'medio', 10.0), $e(2, 'facil', 50.0), $e(3, 'facil', 10.0), $e(4, 'dificil', 0.0)]);
+    igual([3, 1, 2, 4], array_column($p, 'numero'));
+    igual('Marcada como médio, mas só 10,0% acertaram. Erro comum: B (1 aluno).', $p[1]['motivo']);
+});
+
+teste('sem folhas não há prioridades nem dificuldade observada', function () {
+    $e = estatisticas_das_questoes(questoes_do_relatorio(), []);
+    igual([null, null, null, null, null], array_column($e, 'taxa'));
+    igual([], prioridades_de_revisao($e));
+    igual(0, array_sum(array_map('array_sum', matriz_de_dificuldade($e))));
+});
+
+teste('acerto por habilidade junta as questões, do menor para o maior', function () {
+    $h = acerto_por_habilidade(estatisticas_das_questoes(questoes_do_relatorio(), folhas_da_turma('8A')));
+    igual(['D12', 'D07'], array_column($h, 'habilidade'));
+    igual([[4], [1, 2]], array_column($h, 'questoes'));
+    igual([25.0, 50.0], array_column($h, 'taxa'));
+});
+
+teste('matriz de dificuldade marcada × observada', function () {
+    $m = matriz_de_dificuldade(estatisticas_das_questoes(questoes_do_relatorio(), folhas_da_turma('8A')));
+    igual(['facil' => 1, 'medio' => 0, 'dificil' => 1], $m['facil']);
+    igual(['facil' => 0, 'medio' => 0, 'dificil' => 1], $m['medio']);
+    igual(['facil' => 0, 'medio' => 0, 'dificil' => 1], $m['dificil']);
+});
+
+teste('filtros do mapa por disciplina e dificuldade', function () {
+    $e = estatisticas_das_questoes(questoes_do_relatorio(), folhas_do_relatorio());
+    igual([1, 2, 3], array_column(filtrar_questoes($e, 'Matemática', ''), 'numero'));
+    igual([5], array_column(filtrar_questoes($e, '', 'sem'), 'numero'));
+    igual([4], array_column(filtrar_questoes($e, 'Língua Portuguesa', 'dificil'), 'numero'));
+    igual([1, 2, 3, 4, 5], array_column(filtrar_questoes($e, '', ''), 'numero'));
+});
+
 echo "$testes testes passaram.\n";

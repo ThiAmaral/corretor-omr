@@ -80,7 +80,7 @@ button:hover { background: #2c4160; }
   background: linear-gradient(to top, var(--cor) var(--nivel), var(--superficie) var(--nivel));
   display: grid; place-items: center;
 }
-.mapa .bolinha span { background: var(--superficie); color: var(--tinta); border-radius: 999px; min-width: 26px; padding: 0 5px; font-weight: 700; font-size: 14px; line-height: 22px; }
+.mapa .bolinha span:not(.nivel) { background: var(--superficie); color: var(--tinta); border-radius: 999px; min-width: 26px; padding: 0 5px; font-weight: 700; font-size: 14px; line-height: 22px; }
 .mapa strong { font-size: 16px; color: var(--cor); }
 .mapa small { color: var(--grafite); font-size: 13px; line-height: 1.35; }
 
@@ -171,4 +171,69 @@ button.perigo { color: var(--reforco); }
   .selecao .acoes label { flex: 1 1 100%; }
   .selecao select { width: 100%; }
   .selecao button { padding: 7px 10px; font-size: 14px; }
+}
+
+/* ---------------------------------------------- Relatório (Fase 4) */
+
+.titulo-secao { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 16px; }
+.acoes-relatorio { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 0 0 12px; font-size: 15px; }
+.acoes-relatorio button { padding: 7px 14px; font-size: 15px; }
+.tabela .inicio-grupo { border-left: 1px solid var(--linha); }
+.tabela tr.grupos th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; padding-bottom: 0; border-bottom: 0; }
+.tabela.compacta { width: auto; min-width: 280px; }
+.tabela caption { text-align: left; font-weight: 700; padding: 0 0 6px; }
+h3 { font-size: 17px; margin: 24px 0 8px; }
+
+/* Selo de dificuldade: as mesmas cores dos botões da revisão do gabarito */
+.nivel { display: inline-block; font-size: 13px; line-height: 1.5; padding: 0 8px; border-radius: 999px; color: #fff; font-weight: 700; }
+.nivel.facil { background: var(--certo); }
+.nivel.medio { background: var(--atencao); }
+.nivel.dificil { background: var(--reforco); }
+
+/* Prioridades de revisão: uma linha por questão, com o motivo logo abaixo */
+.grupo-prioridade { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.grupo-prioridade .dica { display: inline; }
+.prioridades { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.prioridades li {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) 120px 64px; grid-template-areas: "q etiquetas barra taxa" "motivo motivo motivo motivo";
+  align-items: center; gap: 4px 12px; background: var(--superficie); border: 1px solid var(--linha);
+  border-left: 5px solid var(--reforco); border-radius: var(--raio); padding: 10px 14px;
+}
+.prioridades li.grupo-1 { border-left-color: var(--grafite); }
+.prioridades li.grupo-2 { border-left-color: var(--linha); }
+.prioridades .questao { grid-area: q; font-weight: 700; font-size: 17px; }
+.prioridades .etiquetas { grid-area: etiquetas; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.prioridades .barra { grid-area: barra; height: 8px; border-radius: 999px; background: linear-gradient(to right, var(--reforco) var(--nivel), var(--reforco-fundo) var(--nivel)); }
+.prioridades .taxa { grid-area: taxa; text-align: right; font-variant-numeric: tabular-nums; }
+.prioridades .motivo { grid-area: motivo; color: var(--grafite); font-size: 15px; }
+@media (max-width: 640px) {
+  .prioridades li { grid-template-columns: auto 1fr auto; grid-template-areas: "q barra taxa" "etiquetas etiquetas etiquetas" "motivo motivo motivo"; }
+}
+
+/* Mapa: letra da dificuldade no canto da bolinha */
+.mapa .bolinha { position: relative; }
+.mapa .bolinha .nivel { position: absolute; top: -6px; right: -10px; min-width: 0; padding: 0 5px; font-size: 11px; line-height: 17px; border: 2px solid var(--papel); }
+
+/* Dificuldade marcada × observada */
+.lado-a-lado { display: flex; flex-wrap: wrap; gap: 16px 32px; align-items: start; }
+.matriz td.diagonal { background: var(--certo-fundo); color: var(--certo); font-weight: 700; }
+.matriz td.diverge { background: var(--atencao-fundo); color: var(--atencao); font-weight: 700; }
+.matriz tbody th { background: var(--papel); }
+
+/* Impressão: só o relatório, sem formulários nem links de navegação */
+.so-impressao { display: none; }
+@media print {
+  :root { background: #fff; }
+  body { font-size: 12pt; }
+  main { max-width: none; padding: 0; }
+  .nao-imprimir, .topo .voltar, .aviso, .erro { display: none !important; }
+  .so-impressao { display: block; }
+  h1 { margin-top: 12px; }
+  h2 { margin-top: 20px; break-after: avoid; }
+  section { overflow: visible; }
+  .tabela tr.ativa td { background: none; }
+  .prioridades li, .mapa li, .tabela tr { break-inside: avoid; }
+  .mapa li { padding-top: 8px; } /* o selo da dificuldade sobe 6px além da bolinha */
+  .bolinha, .barra, .nivel, .matriz td, .tabela th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { text-decoration: none; }
 }
