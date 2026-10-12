@@ -20,5 +20,6 @@ if not exist ".env" (
 
 echo Corretor de provas em http://localhost:8000  (Ctrl+C para parar)
 start "" http://localhost:8000
-rem pdo_pgsql (banco), curl e openssl (Storage) vem com o PHP do winget, mas desligadas no php.ini.
-php -d extension=pdo_pgsql -d extension=curl -d extension=openssl -d upload_max_filesize=50M -d post_max_size=200M -d max_file_uploads=100 -S localhost:8000 -t web
+rem pdo_pgsql (banco), curl e openssl (Storage e login) vem com o PHP do winget, mas desligadas no php.ini.
+rem O roteador manda /api/... para a API e esconde as pastas src/ e testes/.
+php -d extension=pdo_pgsql -d extension=curl -d extension=openssl -d upload_max_filesize=50M -d post_max_size=200M -d max_file_uploads=100 -S localhost:8000 -t web web/src/roteador.php

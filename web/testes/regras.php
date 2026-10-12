@@ -12,6 +12,7 @@ if (PHP_SAPI !== 'cli') {
 ini_set('zend.assertions', '1');
 ini_set('assert.exception', '1');
 require dirname(__DIR__) . '/lib.php';
+require dirname(__DIR__) . '/src/api.php';
 
 $testes = 0;
 function teste(string $nome, callable $corpo): void
@@ -317,6 +318,169 @@ teste('filtros do mapa por disciplina e dificuldade', function () {
     igual([5], array_column(filtrar_questoes($e, '', 'sem'), 'numero'));
     igual([4], array_column(filtrar_questoes($e, 'Língua Portuguesa', 'dificil'), 'numero'));
     igual([1, 2, 3, 4, 5], array_column(filtrar_questoes($e, '', ''), 'numero'));
+});
+
+/* ------------------------------------------------------- API e login */
+
+/** Roda a função e devolve o ErroDoUsuario esperado (falha se não lançar). */
+function erro_de(callable $corpo): ErroDoUsuario
+{
+    try {
+        $corpo();
+    } catch (ErroDoUsuario $ex) {
+        return $ex;
+    }
+    throw new AssertionError('esperava ErroDoUsuario');
+}
+
+/** JWT de mentira (sem assinatura válida), só para testar a leitura do conteúdo. */
+function jwt_de_teste(array $conteudo): string
+{
+    $b64 = fn($s) => rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
+    return $b64('{"alg":"HS256"}') . '.' . $b64(json_encode($conteudo)) . '.assinatura';
+}
+
+teste('caminho da API pela URL', function () {
+    igual('provas/4/folhas', caminho_da_api('/api/provas/4/folhas?turma=8A'));
+    igual('provas', caminho_da_api('/api/index.php/provas'));
+    igual('provas', caminho_da_api('/corretor/api/provas/'));
+    igual('', caminho_da_api('/api'));
+});
+
+teste('rotas: função certa, id numérico, 404 e 405', function () {
+    $rotas = rotas_da_api();
+    igual(['api_listar_provas', []], encontrar_rota('GET', 'provas', $rotas));
+    igual(['api_cadastrar_prova', []], encontrar_rota('POST', 'provas', $rotas));
+    igual(['api_salvar_questoes', ['id' => 12]], encontrar_rota('PUT', 'provas/12/questoes', $rotas));
+    igual(['api_revisar_folha', ['id' => 7]], encontrar_rota('PUT', 'folhas/7', $rotas));
+    igual(404, erro_de(fn() => encontrar_rota('GET', 'provas/abc', $rotas))->status);
+    igual(404, erro_de(fn() => encontrar_rota('GET', 'provas/0', $rotas))->status);
+    igual(404, erro_de(fn() => encontrar_rota('GET', 'usuarios', $rotas))->status);
+    $ex = erro_de(fn() => encontrar_rota('PATCH', 'provas/3', $rotas));
+    igual(405, $ex->status);
+    igual(['GET', 'DELETE'], $ex->detalhes['permitidos']);
+});
+
+teste('token Bearer do cabeçalho', function () {
+    igual('abc.def.ghi', token_do_cabecalho(['HTTP_AUTHORIZATION' => 'Bearer abc.def.ghi']));
+    igual('abc', token_do_cabecalho(['REDIRECT_HTTP_AUTHORIZATION' => 'bearer   abc ']));
+    igual(null, token_do_cabecalho(['HTTP_AUTHORIZATION' => 'Basic dXN1YXJpbzpzZW5oYQ==']));
+    igual(null, token_do_cabecalho([]));
+});
+
+teste('token vencido ou que não é JWT é recusado sem chamar o Supabase', function () {
+    igual(['sub' => 'x', 'exp' => 100], conteudo_do_jwt(jwt_de_teste(['sub' => 'x', 'exp' => 100])));
+    igual(null, conteudo_do_jwt('nao-e-um-jwt'));
+    igual(null, professor_do_token(jwt_de_teste(['sub' => 'x', 'exp' => time() - 10])));
+    igual(null, professor_do_token('nao-e-um-jwt'));
+});
+
+teste('token conferido fica em cache até vencer', function () {
+    $token = jwt_de_teste(['sub' => 'p1', 'exp' => time() + 3600, 'teste' => random_int(0, PHP_INT_MAX)]);
+    $cache = arquivo_cache_token($token);
+    $professor = ['id' => '00000000-0000-0000-0000-000000000001', 'email' => 'prof@escola.br'];
+    file_put_contents($cache, json_encode(['professor' => $professor, 'ate' => time() + 60]));
+    igual($professor, professor_do_token($token));
+    unlink($cache);
+    igual(false, str_contains($cache, $token)); // o token nunca vai para o nome do arquivo
+});
+
+teste('CSRF: só o token da sessão passa', function () {
+    $_SESSION = [];
+    $token = token_csrf();
+    igual($token, token_csrf());
+    conferir_csrf($token);
+    igual(403, erro_de(fn() => conferir_csrf('outro'))->status);
+    igual(403, erro_de(fn() => conferir_csrf(null))->status);
+    $_SESSION = [];
+    igual(403, erro_de(fn() => conferir_csrf($token))->status);
+});
+
+teste('volta do login só para caminhos deste site', function () {
+    igual('/prova.php?id=4', destino_seguro('/prova.php?id=4'));
+    igual('index.php', destino_seguro('//outro.site/x'));
+    igual('index.php', destino_seguro('/' . chr(92) . 'outro.site'));
+    igual('index.php', destino_seguro('https://outro.site'));
+    igual('index.php', destino_seguro(''));
+});
+
+teste('tipo real do arquivo, não a extensão', function () {
+    $raiz = dirname(__DIR__, 2);
+    igual('jpg', tipo_do_arquivo("$raiz/exemplos/ama/geradas_8A/gabarito.jpg"));
+    igual('png', tipo_do_arquivo("$raiz/exemplos/gabarito_oficial.png"));
+    igual('pdf', tipo_do_arquivo("$raiz/exemplos/ama/AMA_2026_M0801_folha_em_branco.pdf"));
+    $falso = tempnam(sys_get_temp_dir(), 'falso');
+    file_put_contents($falso, "<?php echo 'não sou uma foto';");
+    igual(null, tipo_do_arquivo($falso));
+    unlink($falso);
+});
+
+teste('upload grande demais ou de outro tipo é recusado', function () {
+    $falso = tempnam(sys_get_temp_dir(), 'falso');
+    file_put_contents($falso, 'texto');
+    $campo = fn($tmp, $erro = UPLOAD_ERR_OK) => ['name' => 'foto.jpg', 'tmp_name' => $tmp, 'error' => $erro, 'size' => 5];
+    igual(415, erro_de(fn() => upload_normalizado($campo($falso)))->status);
+    igual(413, erro_de(fn() => upload_normalizado($campo($falso, UPLOAD_ERR_INI_SIZE)))->status);
+    igual([], upload_normalizado($campo('', UPLOAD_ERR_NO_FILE)));
+    unlink($falso);
+    $foto = dirname(__DIR__, 2) . '/exemplos/ama/geradas_8A/gabarito.jpg';
+    igual('jpg', upload_normalizado(['name' => ['x.png'], 'tmp_name' => [$foto], 'error' => [0], 'size' => [1]])[0]['ext']);
+});
+
+teste('tamanho do post_max_size em bytes', function () {
+    igual(200 * 1024 * 1024, tamanho_em_bytes('200M'));
+    igual(2 * 1024 ** 3, tamanho_em_bytes('2G'));
+    igual(512, tamanho_em_bytes('512'));
+});
+
+teste('turma: espaços limpos, vazia ou longa recusada', function () {
+    igual('8A', turma_valida('  8A '));
+    igual('8º ano A', turma_valida("8º  ano\tA"));
+    igual(422, erro_de(fn() => turma_valida('   '))->status);
+    igual(422, erro_de(fn() => turma_valida(str_repeat('x', 21)))->status);
+});
+
+teste('revisão pela API: só as questões e os campos enviados mudam', function () {
+    $atuais = [
+        ['numero' => 1, 'resposta' => 'A', 'disciplina' => 'Matemática', 'dificuldade' => null, 'habilidade' => null, 'duvidosa' => false],
+        ['numero' => 2, 'resposta' => null, 'disciplina' => 'Matemática', 'dificuldade' => 'facil', 'habilidade' => 'D07', 'duvidosa' => true],
+    ];
+    $entrada = entrada_da_revisao($atuais, [['numero' => 2, 'resposta' => 'C', 'habilidade' => null]]);
+    igual(['resposta' => 'A', 'disciplina' => 'Matemática', 'dificuldade' => null, 'habilidade' => null], $entrada[0]);
+    igual(['resposta' => 'C', 'disciplina' => 'Matemática', 'dificuldade' => 'facil', 'habilidade' => ''], $entrada[1]);
+    igual('A', entrada_da_revisao($atuais, [])[0]['resposta']);
+    igual('A prova não tem a questão 3 e 9.', erro_de(fn() => entrada_da_revisao($atuais, [['numero' => 3], ['numero' => 9]]))->getMessage());
+    igual(400, erro_de(fn() => entrada_da_revisao($atuais, [['resposta' => 'B']]))->status);
+});
+
+teste('revisão pela API passa pela mesma validação das páginas', function () {
+    $prova = ['layout' => ['alternativas' => ['A', 'B', 'C', 'D']], 'questoes' => [
+        ['numero' => 1, 'resposta' => 'A', 'disciplina' => 'Matemática', 'dificuldade' => null, 'habilidade' => null, 'duvidosa' => false],
+    ]];
+    [, $erros] = validar_revisao(entrada_da_revisao($prova['questoes'], [['numero' => 1, 'resposta' => 'E']]), $prova, true);
+    igual(['A resposta da questão 1 precisa ser uma das alternativas (A, B, C, D).', 'Falta a resposta da questão 1.'], $erros);
+});
+
+teste('respostas de folha: lista completa ou só as que mudaram', function () {
+    $atuais = ['A', null, 'MULTIPLA'];
+    igual(['B', 'C', 'D'], respostas_da_revisao($atuais, ['B', 'C', 'D']));
+    igual(['A', 'B', null], respostas_da_revisao($atuais, ['2' => 'B', '3' => null]));
+    igual(422, erro_de(fn() => respostas_da_revisao($atuais, ['4' => 'A']))->status);
+    igual(400, erro_de(fn() => respostas_da_revisao($atuais, 'ABC'))->status);
+});
+
+teste('folha corrigida no formato da API', function () {
+    $f = folha_json(['id' => '3', 'prova_id' => '1', 'turma' => '8A', 'arquivo' => 'a.jpg', 'pagina' => '1',
+        'respostas' => ['A', 'C', null], 'revisar' => [2], 'revisada' => 'f'], ['A', 'B', 'C']);
+    igual([true, false, false], $f['acertos']);
+    igual(1, $f['n_acertos']);
+    igual(33.3, $f['taxa']);
+    igual(false, $f['revisada']);
+});
+
+teste('data do banco em ISO 8601 no horário de Brasília', function () {
+    igual('2026-10-12T11:03:00-03:00', data_iso('2026-10-12 14:03:00.123456+00'));
+    igual(null, data_iso(null));
 });
 
 echo "$testes testes passaram.\n";

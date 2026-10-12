@@ -16,7 +16,7 @@ Legenda: ✅ feito · 🔄 em andamento · ⏳ pendente · ⚠️ bloqueado / de
 | 3. Revisão do gabarito, áreas e dificuldade | ✅ | Testada no projeto real (migração aplicada pelo Thiago) |
 | 4. Relatórios por dificuldade | ✅ | Testada no projeto real com as provas de teste (2026-10-12) |
 | 5. Fotos de celular | ✅ (com fotos simuladas) | Falta calibrar com fotos reais (depende da Fase 0) |
-| 6. API e login | ⏳ | |
+| 6. API e login | ✅ | Testada com o login real do Supabase (2026-10-12). HTTPS depende da hospedagem |
 | 7. App | ⏳ | |
 | 8. Piloto | ⏳ | |
 
@@ -575,3 +575,126 @@ Tempo: ~0,2 s por foto com QR legível; ~2,4 s quando o QR não é lido.
   erro, opções novas do gerador) e plano atualizados. Fase concluída com fotos
   simuladas; 5.4 aguarda as fotos reais.
 
+
+---
+
+## Fase 6: API REST e login
+
+Início: 2026-10-12.
+
+Objetivo: o celular fala com o servidor. Todo o fluxo da Fase 3 e o envio de
+folhas funcionam pela API, com login de professor pelo Supabase Auth.
+
+### Itens
+
+| # | Item | Situação | Observação |
+|---|---|---|---|
+| 6.1 | Lógica tirada do HTML para funções | ✅ | `web/src/servicos.php`: `listar_provas()`, `cadastrar_prova()`, `aprovar_gabarito()` (salva e aprova), `descartar_rascunho()`, `ler_folhas_aluno()`, `buscar_folha()`, `revisar_folha()`, `relatorio_prova()`. As páginas e a API chamam as mesmas funções |
+| 6.2 | Erros com código HTTP em vez de `exit` | ✅ | `ErroDoUsuario` (mensagem + código + detalhes). Na página vira mensagem; na API, `{"erro": ...}` com 400, 401, 403, 404, 405, 409, 413, 415, 422. Erro interno: 500 com mensagem genérica e detalhe só no log |
+| 6.3 | Controlador frontal `web/api/index.php` e as rotas do plano | ✅ | Rotas em `web/src/api.php`. Além das 7 do plano: `GET /api/config`, `GET /api/provas/{id}`, `DELETE /api/provas/{id}` (descartar rascunho), `GET /api/provas/{id}/folhas`, `GET /api/folhas/{id}`. Sem Docker, `web/src/roteador.php` faz o papel do Apache |
+| 6.4 | Validação do token do Supabase no PHP, com cache | ✅ | `GET /auth/v1/user` com `curl`; cache de 5 min num arquivo com o hash do token (nunca o token), sem passar do vencimento. Token vencido ou malformado é recusado sem chamar o Supabase |
+| 6.5 | Login no painel web (sessão PHP) e CSRF nos formulários | ✅ | `login.php` e `sair.php` (POST). Token na sessão, renovado sozinho antes de vencer. CSRF em todos os formulários POST, trocado no login. Volta para a página pedida, só dentro do site |
+| 6.6 | Autoria: `provas.criado_por` | ✅ | Gravado no cadastro (página e API), com o id real do professor (prova 9) |
+| 6.7 | Uploads: tamanho máximo e tipo real (`finfo`) | ✅ | 20 MB por arquivo; JPEG, PNG, TIFF e PDF pelo conteúdo; a extensão gravada vem do tipo real |
+| 6.8 | Chaves só no servidor | ✅ | A chave secret e a `DATABASE_URL` só no `.env` (fora do git). O app (Fase 7) usa só a URL e a chave publishable, que entrou como opcional no `.env.exemplo` |
+| 6.9 | HTTPS | ⏳ | Depende da hospedagem (fora do escopo do plano). O cookie da sessão já sai com `Secure` quando a página é HTTPS |
+| 6.10 | Política de privacidade | ✅ (rascunho) | [docs/politica_de_privacidade.md](docs/politica_de_privacidade.md). Faltam os dados da escola, a base legal e o prazo de guarda |
+| 6.11 | Testes PHP novos e coleção da API (`docs/api.postman.json`) | ✅ | 16 testes novos (45 no total), passando. Coleção do Postman com 14 pedidos e o script `ferramentas/testar_api.ps1` (mesmo fluxo, com tabela de resultado) |
+| 6.14 | Diagramas de sequência e de componentes | 🔄 | Rascunho em Mermaid em [docs/modelagem/fase6_diagramas.md](docs/modelagem/fase6_diagramas.md); a versão do Visual Paradigm é com o Thiago |
+| 6.12 | Professor cadastrado no Supabase e cadastro público desligado | ✅ | Thiago cadastrou o próprio usuário (`6aa1b615-…`) em 2026-10-12. Cadastro público: conferir no painel |
+| 6.13 | Teste de ponta a ponta pela API, com login | ✅ | Script do Thiago com o login real: fluxo completo (prova 10). Antes, 18/18 com o Auth simulado e o id real (prova 9) |
+
+### Teste local (Auth simulado, banco e Storage reais)
+
+Não há professor no Supabase Auth ainda, e o assistente não deve digitar senha
+num serviço de fora. Por isso o login foi testado com um **Auth simulado** em
+`localhost:8011` (não versionado): responde `/auth/v1/token`, `/auth/v1/user` e
+`/auth/v1/logout` com tokens de teste e repassa `/storage/v1/...` ao Supabase
+real. O banco é o real.
+
+| Cenário | Resultado |
+|---|---|
+| Sem token, token qualquer, rota inexistente, método errado | 401, 401, 404, 405 (com `Allow`) |
+| `src/` e `testes/` pelo navegador | 404 |
+| `GET /api/provas?ano=2026` | 4 provas, com turmas e folhas |
+| `GET /api/provas/5/relatorio?turma=8A` | 63,1%; Fácil 64,4%, Médio 60,6%, Difícil 64,4%; prioridades 17, 11, 9, 12, 13, 26, 21, 25: **iguais à Fase 4** |
+| `POST /api/provas/4/folhas` (turma `9Z-API`), 1 foto | Nota, questões a revisar (12, 13, 18) e coordenadas das bolinhas; ~2,2 s |
+| Mesmo envio com 3 arquivos | 2 lidas; a do modelo antigo volta com `codigo: pouca_resolucao` e não é gravada |
+| Arquivo de texto com nome `.jpg`, sem turma, sem arquivo, prova inexistente | 415, 422, 422, 404 |
+| `GET /api/folhas/108` | Imagem anotada por URL assinada: 200, JPEG de 76 KB |
+| `PUT /api/folhas/108` só com 3 questões | Revisada, `revisar = []`; letra inválida 422, JSON quebrado 400, lista incompleta 422 |
+| `POST /api/provas` (cadastro) | Validações 422 certas. Gravar dá 500 por causa da chave estrangeira `criado_por` → `auth.users`: o professor simulado não existe no banco. Esperado; depende de 6.12 |
+| Painel: página pedida sem login | Vai para `login.php?volta=...`; senha errada mostra "E-mail ou senha incorretos."; certa volta para a página |
+| CSRF | Login, revisão de folha e sair sem o token ou com token errado: 403 |
+| Sair | Só por POST; avisa o Supabase (`/logout`); depois disso as páginas pedem login |
+| `?volta=//outro.site/x` | Vai para `index.php` |
+| Token da sessão perto de vencer | Renovado sozinho pelo refresh token |
+| Celular (375 px) | E-mail e "Sair" descem para a 2ª linha do topo; sem rolagem horizontal |
+| `php web/testes/regras.php` | 45/45 |
+
+Ficaram no banco 3 folhas da turma `9Z-API` na prova 4 (de teste), uma delas
+revisada pela API.
+
+### Teste com o professor real (2026-10-12)
+
+**1ª rodada do `testar_api.ps1`, pelo Thiago, contra a porta 8000:** login no
+Supabase Auth real, 401 sem token e com token falso e `GET /api/config` ok. O
+cadastro deu 500. Causa: havia **dois** `php -S` na porta 8000, o do
+`iniciar.cmd` e um antigo, aberto por outra conversa do Claude (sem o roteador
+e sem `OMR_PYTHON`). Nesse segundo, o PHP chamava `python3`, que no Windows é o
+atalho da Microsoft Store, e o leitor falhava. Correção: no Windows, o padrão
+passou a ser `python` (`lib.php`); `OMR_PYTHON` continua mandando quando existe.
+
+**2ª rodada, pelo assistente:** servidor de teste na 8010, **sem**
+`OMR_PYTHON`, e Auth simulado devolvendo o id real do Thiago, para a chave
+estrangeira `criado_por` valer de verdade. **18/18 passos**:
+
+| Passo | Resultado |
+|---|---|
+| Cadastro pela foto | 201, prova 9 ("TESTE Fase 6 - API …"), caderno `2265M0801`, 26 questões, `criado_por` = id do Thiago, leitura com coordenadas e confiança alta |
+| Folha antes de aprovar | 409 |
+| Revisão (1–9 Fácil, 10–18 Médio, 19–26 Difícil; D07 em 1–4) | 200; resposta "Z" recusada com 422 |
+| Aprovação | 200, `ativa`; aprovar de novo, 409 |
+| 20 fotos da 8A, uma por vez | 20/20, contador 20, **1,3 s por foto** |
+| Folha do modelo antigo | Recusada (`pouca_resolucao`), não gravada |
+| Relatório da 8A | **63,1%**; Fácil 64,4%, Médio 60,6%, Difícil 64,4%; prioridades 17, 11, 9, 12, 13, 26, 21, 25 (iguais às Fases 4 e 6) |
+| Folha: detalhe, imagem e revisão | 200, imagem 200, revisada |
+
+Ficou no banco a prova 9, com 20 folhas, criada pelo Thiago.
+
+**3ª rodada, pelo Thiago, com o login real** (depois de encerrar o servidor
+duplicado, PID 22692): fluxo completo. A prova 10 ("TESTE Fase 6 - API 12/10
+12:49") ficou ativa, com `criado_por` do Thiago, 20 folhas lidas, 1 revisada e
+as mesmas prioridades (17, 11, 9, 12, 13, 26, 21, 25). O acerto da 8A aparece
+como 62,9% porque o último passo do script marca a questão 1 de uma folha como
+dupla; quando o script conferiu o relatório, antes da revisão, era 63,1%.
+
+### Diário
+
+- **2026-10-12** — Fase iniciada. Lidos o plano, `lib.php`, `index.php`,
+  `gabarito.php`, `prova.php`, `folha.php`, `imagem.php` e `exportar.php`.
+  O projeto real ainda não tem nenhum usuário no Supabase Auth.
+- **2026-10-12** — Lógica das páginas movida para `web/src/servicos.php`;
+  `ErroDoUsuario` com código HTTP; `buscar_prova()` não usa mais `exit`.
+  `storage()` passou a usar `supabase_http()`, que também serve ao Auth.
+- **2026-10-12** — Login: `web/src/auth.php` (token do app com cache, sessão
+  web com renovação, CSRF), `login.php`, `sair.php`. Todas as páginas chamam
+  `iniciar_pagina()`. Uploads conferidos pelo conteúdo (`finfo`) e pelo tamanho.
+- **2026-10-12** — API: `web/src/api.php` (rotas, formato JSON, revisão parcial
+  de gabarito e de folha) e `web/api/index.php`. Roteador para o `php -S`
+  (`iniciar.cmd`) e configuração do Apache no `Dockerfile` (não testada: sem
+  Docker nesta máquina). 16 testes novos.
+- **2026-10-12** — Teste local com Auth simulado. Único erro achado foi do
+  ambiente de teste (o servidor de teste não tinha o `OMR_PYTHON`). O CSRF passou
+  a ser trocado no login.
+- **2026-10-12** — README (login dos professores, roteador, seção da API),
+  coleção do Postman, `ferramentas/testar_api.ps1` (testado até o cadastro com o
+  Auth simulado), rascunho da política de privacidade e diagramas em Mermaid.
+- **2026-10-12** — Thiago cadastrou o próprio usuário no Supabase Auth e
+  rodou o script: login real ok, cadastro com 500 por um servidor duplicado na
+  porta 8000 que chamava `python3`. Padrão do Python no Windows trocado para
+  `python`. Script repetido pelo assistente com o id real: 18/18.
+- **2026-10-12** — Servidor duplicado encerrado; Thiago rodou o script com o
+  login real e o fluxo passou inteiro (prova 10). **Fase concluída.** Ficam:
+  HTTPS (hospedagem), dados da escola na política de privacidade, diagramas no
+  Visual Paradigm e conferir no painel se o cadastro público está desligado.

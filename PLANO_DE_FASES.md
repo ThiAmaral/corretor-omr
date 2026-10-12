@@ -551,6 +551,10 @@ corretamente, e as marcações fracas vão para revisão.
 
 ## Fase 6: API REST e login
 
+> **Situação (2026-10-12):** concluída e testada com o login real do Supabase
+> (`ferramentas/testar_api.ps1`). HTTPS depende da hospedagem. Detalhes em
+> [PROGRESSO.md](PROGRESSO.md#fase-6-api-rest-e-login).
+
 **Objetivo:** o celular precisa falar com o servidor. Hoje o sistema só roda em
 `localhost`, sem login.
 
@@ -607,13 +611,14 @@ Auth.
 
 ### Segurança
 
-- [ ] **Uploads:** limitar o tamanho e validar o tipo real do arquivo
+- [x] **Uploads:** limitar o tamanho e validar o tipo real do arquivo
       (`finfo_file`), não só a extensão.
-- [ ] **Chaves:** a chave secret do Supabase e a `DATABASE_URL` ficam só nas
+- [x] **Chaves:** a chave secret do Supabase e a `DATABASE_URL` ficam só nas
       variáveis de ambiente do servidor; nunca no app nem no git.
 - [ ] **HTTPS:** o servidor precisa ser publicado com HTTPS, porque o iOS só
       aceita conexões seguras.
-- [ ] **Privacidade:** escrever a política de privacidade, que as lojas exigem.
+- [x] **Privacidade:** escrever a política de privacidade, que as lojas exigem
+      (rascunho em [docs/politica_de_privacidade.md](docs/politica_de_privacidade.md)).
       Como só a área de respostas é guardada, o sistema não armazena o nome do
       aluno.
 

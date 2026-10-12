@@ -13,6 +13,11 @@ RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
 RUN { echo "upload_max_filesize=50M"; echo "post_max_size=200M"; echo "max_file_uploads=100"; \
       echo "max_execution_time=300"; echo "memory_limit=512M"; } > /usr/local/etc/php/conf.d/corretor.ini
 
+# API: /api/<rota> vai para api/index.php. As pastas src/ e testes/ não abrem pelo navegador.
+RUN { echo '<Directory /var/www/html/api>'; echo '    FallbackResource /api/index.php'; echo '</Directory>'; \
+      echo '<DirectoryMatch "^/var/www/html/(src|testes)">'; echo '    Require all denied'; echo '</DirectoryMatch>'; \
+    } > /etc/apache2/conf-available/corretor.conf && a2enconf corretor
+
 COPY worker /var/www/worker
 COPY web /var/www/html
 

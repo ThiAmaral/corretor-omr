@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
 
+iniciar_pagina();
 $prova = buscar_prova((int)($_GET['id'] ?? 0));
 $id = (int)$prova['id'];
 if ($prova['status'] === 'rascunho') {
@@ -19,86 +20,10 @@ if (isset($_GET['lidas'])) {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
-        $turma = trim($_POST['turma'] ?? '');
-        if ($turma === '') {
-            throw new InvalidArgumentException('Informe a turma das folhas enviadas.');
-        }
-        $uploads = upload_normalizado($_FILES['folhas'] ?? []);
-        if (!$uploads) {
-            throw new InvalidArgumentException('Selecione ao menos um arquivo.');
-        }
-        $caminhos = [];
-        $nomeOriginal = [];
-        foreach ($uploads as $u) {
-            $c = guardar_upload($u);
-            $caminhos[] = $c;
-            $nomeOriginal[$c] = $u['nome'];
-        }
-
-        // As fotos enviadas ficam só na pasta temporária. No Storage vão a área de
-        // respostas recortada (sem o nome do aluno) e a imagem anotada pelo leitor.
-        // Gabarito digitado: sem formato ainda, cada folha é lida com o formato
-        // detectado, e a primeira que servir define o formato e o caderno da prova.
-        $semFormato = !formato_conhecido($layout);
-        $leituras = ler_folhas($caminhos, $layout);
-        if ($semFormato) {
-            foreach ($leituras as &$l) {
-                if ($l['ok'] && ($motivo = conferir_formato_da_folha($layout, $l, $gabarito)) !== null) {
-                    $l = ['ok' => false, 'erro' => $motivo] + $l;
-                }
-            }
-            unset($l);
-        }
-        $ins = db()->prepare('INSERT INTO folhas (prova_id, turma, arquivo, pagina, imagem, imagem_debug, respostas, niveis, revisar, erro)
-                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-        $enviadas = ['folhas' => [], 'anotadas' => []];
-        $ok = $falhas = 0;
-        try {
-            db()->beginTransaction();
-            foreach ($leituras as $l) {
-                $nome = $nomeOriginal[$l['arquivo']] ?? basename($l['arquivo']);
-                if ($l['ok']) {
-                    $ok++;
-                    $prefixo = "$id/" . bin2hex(random_bytes(8));
-                    $imagem = $imagemDebug = null;
-                    if (isset($l['imagem_recorte'])) {
-                        $imagem = $enviadas['folhas'][] = storage_enviar('folhas', "{$prefixo}_area.jpg", $l['imagem_recorte']);
-                    }
-                    if (isset($l['imagem_debug'])) {
-                        $imagemDebug = $enviadas['anotadas'][] = storage_enviar('anotadas', "{$prefixo}_anotada.jpg", $l['imagem_debug']);
-                    }
-                    $ins->execute([
-                        $id, $turma, $nome, $l['pagina'], $imagem, $imagemDebug,
-                        json_encode(respostas_da_leitura($l)),
-                        json_encode(array_column($l['respostas'], 'niveis')),
-                        json_encode(questoes_para_revisar($l)),
-                        null,
-                    ]);
-                } else {
-                    $falhas++;
-                    $ins->execute([$id, $turma, $nome, $l['pagina'], null, null, null, null, '[]', $l['erro']]);
-                }
-            }
-            if ($semFormato && formato_conhecido($layout)) {
-                $modelo = modelo_do_caderno($layout['caderno'] ?? null);
-                db()->prepare('UPDATE provas SET layout = ?, caderno = ?, modelo = ? WHERE id = ?')
-                    ->execute([json_encode(layout_do_leitor($layout), JSON_UNESCAPED_UNICODE),
-                        $layout['caderno'] ?? null, $modelo['chave'] ?? null, $id]);
-            }
-            db()->commit();
-        } catch (Throwable $ex) {
-            if (db()->inTransaction()) {
-                db()->rollBack();
-            }
-            foreach ($enviadas as $bucket => $lista) {
-                try {
-                    storage_apagar($bucket, $lista);
-                } catch (Throwable) {
-                    // O erro original é o que importa para o professor.
-                }
-            }
-            throw $ex;
-        }
+        $turma = turma_valida((string)($_POST['turma'] ?? ''));
+        $folhas = ler_folhas_aluno($prova, $turma, upload_normalizado($_FILES['folhas'] ?? []));
+        $ok = count(array_filter(array_column($folhas, 'ok')));
+        $falhas = count($folhas) - $ok;
         redirecionar("prova.php?id=$id&turma=" . urlencode($turma) . "&lidas=$ok&falhas=$falhas");
     } catch (Throwable $ex) {
         $erro = $ex->getMessage();
@@ -108,22 +33,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 /* ------------------------------------------------------------ Relatório */
 
 $questoes = $prova['questoes'];
-[$lidas, $falhas] = carregar_folhas($prova);
-$resumo = resumo_por_turma($questoes, $lidas);
-$turmas = array_map('strval', array_keys($resumo)); // turma "7" vira chave inteira no array
-$filtro = in_array($_GET['turma'] ?? '', $turmas, true) ? $_GET['turma'] : '';
-$visiveis = $filtro !== '' ? array_values(array_filter($lidas, fn($f) => $f['turma'] === $filtro)) : $lidas;
-$disciplinas = array_values(array_unique(array_map('disciplina_da_questao', $questoes)));
-$niveis = niveis_da_prova($questoes);
-
-// Por questão, respeitando o filtro de turma
-$estatisticas = estatisticas_das_questoes($questoes, $visiveis);
-$prioridades = prioridades_de_revisao($estatisticas);
-$habilidades = array_values(array_filter(acerto_por_habilidade($estatisticas),
-    fn($h) => $h['taxa'] !== null && $h['taxa'] < LIMITE_REFORCO));
-$matriz = matriz_de_dificuldade($estatisticas);
-$comparadas = array_sum(array_map('array_sum', $matriz));
-$divergentes = array_values(array_filter($estatisticas, fn($e) => $e['diverge']));
+$relatorio = relatorio_prova($prova, (string)($_GET['turma'] ?? ''));
+[
+    'turma' => $filtro, 'turmas' => $turmas, 'resumo' => $resumo, 'lidas' => $lidas, 'falhas' => $falhas,
+    'visiveis' => $visiveis, 'disciplinas' => $disciplinas, 'niveis' => $niveis, 'estatisticas' => $estatisticas,
+    'prioridades' => $prioridades, 'habilidades' => $habilidades, 'matriz' => $matriz,
+    'comparadas' => $comparadas, 'iguais' => $iguais, 'divergentes' => $divergentes,
+] = $relatorio;
 
 // Filtros do mapa de questões
 $filtroDisciplina = in_array($_GET['disciplina'] ?? '', $disciplinas, true) ? $_GET['disciplina'] : '';
@@ -184,6 +100,7 @@ cabecalho($prova['nome'], 'index.php');
 <section class="envio nao-imprimir">
   <h2>Enviar folhas de uma turma</h2>
   <form method="post" enctype="multipart/form-data" class="formulario linha-envio">
+    <?= campo_csrf() ?>
     <label>Turma
       <input name="turma" list="turmas" required placeholder="7A" value="<?= e($_POST['turma'] ?? $filtro) ?>">
       <datalist id="turmas"><?php foreach ($turmas as $t): ?><option value="<?= e($t) ?>"><?php endforeach; ?></datalist>
@@ -339,7 +256,6 @@ cabecalho($prova['nome'], 'index.php');
 <section id="dificuldade">
   <h2>Dificuldade marcada × observada<?= $alvo !== '' ? ' ' . e($alvo) : '' ?></h2>
   <p class="dica">A dificuldade observada vem da proporção de acerto: acima de <?= fmt_pct(LIMITE_FACIL) ?> é fácil, abaixo de <?= fmt_pct(LIMITE_DIFICIL) ?> é difícil, e médio entre as duas.</p>
-  <?php $iguais = array_sum(array_map(fn($n) => $matriz[$n][$n], array_keys(DIFICULDADES))); ?>
   <p><strong><?= $iguais ?> de <?= $comparadas ?></strong> questões com dificuldade marcada ficaram no nível previsto (<?= fmt_pct(pct($iguais, $comparadas)) ?>).</p>
   <div class="lado-a-lado">
     <table class="tabela compacta matriz">

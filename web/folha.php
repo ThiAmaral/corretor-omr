@@ -2,28 +2,16 @@
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
 
-$st = db()->prepare('SELECT * FROM folhas WHERE id = ?');
-$st->execute([(int)($_GET['id'] ?? 0)]);
-$folha = $st->fetch();
-if (!$folha || $folha['erro'] !== null) {
-    http_response_code(404);
-    exit('Folha não encontrada.');
-}
+iniciar_pagina();
+$folha = buscar_folha((int)($_GET['id'] ?? 0));
 $prova = buscar_prova((int)$folha['prova_id']);
 $alts = $prova['layout']['alternativas'];
 $gabarito = $prova['gabarito'];
-$respostas = json_decode($folha['respostas'], true);
-$niveis = json_decode($folha['niveis'] ?? '[]', true);
-$revisar = json_decode($folha['revisar'], true);
+['respostas' => $respostas, 'niveis' => $niveis, 'revisar' => $revisar] = $folha;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $novas = [];
-    foreach ($gabarito as $i => $_) {
-        $v = $_POST['q'][$i] ?? '';
-        $novas[] = in_array($v, $alts, true) || $v === 'MULTIPLA' ? $v : null;
-    }
-    db()->prepare("UPDATE folhas SET respostas = ?, revisar = '[]', revisada = true WHERE id = ?")
-        ->execute([json_encode($novas), $folha['id']]);
+    $novas = array_map(fn($i) => $_POST['q'][$i] ?? null, array_keys($gabarito));
+    revisar_folha($folha, $prova, $novas);
     redirecionar('prova.php?id=' . $prova['id'] . '&turma=' . urlencode($folha['turma']));
 }
 
@@ -43,6 +31,7 @@ cabecalho('Folha de ' . $folha['turma'], 'prova.php?id=' . $prova['id'] . '&turm
   <?php endif; ?>
 
   <form method="post" class="formulario respostas">
+    <?= campo_csrf() ?>
     <table class="tabela">
       <thead><tr><th>Questão</th><th>Resposta lida</th><th>Gabarito</th></tr></thead>
       <tbody>

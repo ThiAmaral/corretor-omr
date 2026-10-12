@@ -1,0 +1,150 @@
+{
+  "info": {
+    "name": "Corretor de provas – API (Fase 6)",
+    "description": "Fluxo completo do aplicativo: login no Supabase Auth, cadastro da prova pela foto do gabarito, revisão, aprovação, envio de folhas, relatório e revisão de uma folha.\n\nAntes de rodar, preencha as variáveis da coleção: servidor, supabase_url, supabase_chave (a publishable), email e senha. Nos pedidos com arquivo, escolha a foto em Body > form-data (ex.: exemplos/ama/geradas_8A/gabarito.jpg e 8A_aluno01.jpg).\n\nO login guarda o token em {{token}}, e o cadastro e o envio guardam {{prova_id}} e {{folha_id}} para os pedidos seguintes. Não salve a senha na coleção exportada.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "servidor", "value": "http://localhost:8000" },
+    { "key": "supabase_url", "value": "https://<id-do-projeto>.supabase.co" },
+    { "key": "supabase_chave", "value": "<chave publishable, começa com sb_publishable_>" },
+    { "key": "email", "value": "" },
+    { "key": "senha", "value": "" },
+    { "key": "token", "value": "" },
+    { "key": "prova_id", "value": "" },
+    { "key": "folha_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Login (Supabase Auth)",
+      "event": [{
+        "listen": "test",
+        "script": { "type": "text/javascript", "exec": [
+          "pm.test('login aceito', () => pm.response.to.have.status(200));",
+          "pm.collectionVariables.set('token', pm.response.json().access_token);"
+        ] }
+      }],
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [
+          { "key": "apikey", "value": "{{supabase_chave}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": { "mode": "raw", "raw": "{\"email\": \"{{email}}\", \"password\": \"{{senha}}\"}" },
+        "url": { "raw": "{{supabase_url}}/auth/v1/token?grant_type=password", "host": ["{{supabase_url}}"], "path": ["auth", "v1", "token"], "query": [{ "key": "grant_type", "value": "password" }] }
+      }
+    },
+    {
+      "name": "2. Configuração",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }],
+      "request": { "method": "GET", "url": { "raw": "{{servidor}}/api/config", "host": ["{{servidor}}"], "path": ["api", "config"] } }
+    },
+    {
+      "name": "3. Listar provas",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }],
+      "request": { "method": "GET", "url": { "raw": "{{servidor}}/api/provas?ano=2026", "host": ["{{servidor}}"], "path": ["api", "provas"], "query": [{ "key": "ano", "value": "2026" }, { "key": "periodo", "value": "", "disabled": true }] } }
+    },
+    {
+      "name": "4. Cadastrar prova (foto do gabarito)",
+      "event": [{
+        "listen": "test",
+        "script": { "type": "text/javascript", "exec": [
+          "pm.test('rascunho criado', () => pm.response.to.have.status(201));",
+          "pm.collectionVariables.set('prova_id', pm.response.json().prova.id);"
+        ] }
+      }],
+      "request": {
+        "method": "POST",
+        "body": { "mode": "formdata", "formdata": [
+          { "key": "ano", "value": "2026", "type": "text" },
+          { "key": "periodo", "value": "4", "type": "text" },
+          { "key": "nome", "value": "TESTE Fase 6 – Postman", "type": "text" },
+          { "key": "gabarito_imagem", "type": "file", "src": "" },
+          { "key": "gabarito_digitado", "value": "AACBBBAADAAABBABDBDCABDCCB", "type": "text", "disabled": true, "description": "Sem foto: ligue este campo e desligue o gabarito_imagem" }
+        ] },
+        "url": { "raw": "{{servidor}}/api/provas", "host": ["{{servidor}}"], "path": ["api", "provas"] }
+      }
+    },
+    {
+      "name": "5. Ver prova",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }],
+      "request": { "method": "GET", "url": { "raw": "{{servidor}}/api/provas/{{prova_id}}", "host": ["{{servidor}}"], "path": ["api", "provas", "{{prova_id}}"] } }
+    },
+    {
+      "name": "6. Revisar gabarito (só o que mudou)",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }],
+      "request": {
+        "method": "PUT",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"questoes\": [\n    {\"numero\": 1, \"dificuldade\": \"facil\", \"habilidade\": \"D07\"},\n    {\"numero\": 2, \"dificuldade\": \"facil\"},\n    {\"numero\": 26, \"dificuldade\": \"dificil\"}\n  ]\n}" },
+        "url": { "raw": "{{servidor}}/api/provas/{{prova_id}}/questoes", "host": ["{{servidor}}"], "path": ["api", "provas", "{{prova_id}}", "questoes"] }
+      }
+    },
+    {
+      "name": "7. Aprovar gabarito",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('aprovada', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().prova.status).to.eql('ativa'); });"
+      ] } }],
+      "request": { "method": "POST", "url": { "raw": "{{servidor}}/api/provas/{{prova_id}}/aprovar", "host": ["{{servidor}}"], "path": ["api", "provas", "{{prova_id}}", "aprovar"] } }
+    },
+    {
+      "name": "8. Enviar folha de aluno",
+      "event": [{
+        "listen": "test",
+        "script": { "type": "text/javascript", "exec": [
+          "pm.test('folha lida', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().folhas[0].ok).to.be.true; });",
+          "pm.collectionVariables.set('folha_id', pm.response.json().folhas[0].id);"
+        ] }
+      }],
+      "request": {
+        "method": "POST",
+        "body": { "mode": "formdata", "formdata": [
+          { "key": "turma", "value": "8A", "type": "text" },
+          { "key": "folha", "type": "file", "src": "" }
+        ] },
+        "url": { "raw": "{{servidor}}/api/provas/{{prova_id}}/folhas", "host": ["{{servidor}}"], "path": ["api", "provas", "{{prova_id}}", "folhas"] }
+      }
+    },
+    {
+      "name": "9. Folhas da turma",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }],
+      "request": { "method": "GET", "url": { "raw": "{{servidor}}/api/provas/{{prova_id}}/folhas?turma=8A", "host": ["{{servidor}}"], "path": ["api", "provas", "{{prova_id}}", "folhas"], "query": [{ "key": "turma", "value": "8A" }] } }
+    },
+    {
+      "name": "10. Relatório da turma",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }],
+      "request": { "method": "GET", "url": { "raw": "{{servidor}}/api/provas/{{prova_id}}/relatorio?turma=8A", "host": ["{{servidor}}"], "path": ["api", "provas", "{{prova_id}}", "relatorio"], "query": [{ "key": "turma", "value": "8A" }] } }
+    },
+    {
+      "name": "11. Ver folha",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }],
+      "request": { "method": "GET", "url": { "raw": "{{servidor}}/api/folhas/{{folha_id}}", "host": ["{{servidor}}"], "path": ["api", "folhas", "{{folha_id}}"] } }
+    },
+    {
+      "name": "12. Revisar folha (só o que mudou)",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('revisada', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().folha.revisada).to.be.true; });"
+      ] } }],
+      "request": {
+        "method": "PUT",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\"respostas\": {\"1\": \"A\", \"2\": null}}" },
+        "url": { "raw": "{{servidor}}/api/folhas/{{folha_id}}", "host": ["{{servidor}}"], "path": ["api", "folhas", "{{folha_id}}"] }
+      }
+    },
+    {
+      "name": "Erro: sem token (espera 401)",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('401', () => pm.response.to.have.status(401));"] } }],
+      "request": { "auth": { "type": "noauth" }, "method": "GET", "url": { "raw": "{{servidor}}/api/provas", "host": ["{{servidor}}"], "path": ["api", "provas"] } }
+    },
+    {
+      "name": "Descartar rascunho (só prova em rascunho)",
+      "request": { "method": "DELETE", "url": { "raw": "{{servidor}}/api/provas/{{prova_id}}", "host": ["{{servidor}}"], "path": ["api", "provas", "{{prova_id}}"] } }
+    }
+  ]
+}

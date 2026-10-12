@@ -9,15 +9,14 @@ require __DIR__ . '/lib.php';
  *   exportar.php?id=4&tipo=turmas               uma linha por turma (acerto por disciplina e por nível)
  */
 
+iniciar_pagina();
 $prova = buscar_prova((int)($_GET['id'] ?? 0));
 if ($prova['status'] === 'rascunho') {
-    http_response_code(404);
-    exit('Prova sem gabarito aprovado.');
+    throw new ErroDoUsuario('Prova sem gabarito aprovado.', 404);
 }
 $tipo = $_GET['tipo'] ?? 'questoes';
 if (!in_array($tipo, ['questoes', 'turmas'], true)) {
-    http_response_code(400);
-    exit('Tipo de exportação inválido.');
+    throw new ErroDoUsuario('Tipo de exportação inválido.', 400);
 }
 $questoes = $prova['questoes'];
 [$lidas] = carregar_folhas($prova);

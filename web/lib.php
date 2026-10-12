@@ -9,22 +9,45 @@ declare(strict_types=1);
  * - Chama o leitor óptico em Python (worker/omr_cli.py). Na versão final essa
  *   chamada vira uma mensagem no RabbitMQ; o formato do JSON continua o mesmo.
  * - Faz a correção: o Python só lê, quem compara com o gabarito é o PHP.
+ * As operações do sistema (cadastrar prova, aprovar gabarito, ler folhas, relatório)
+ * ficam em src/servicos.php e são as mesmas para as páginas e para a API (api/).
+ * O login dos professores é o Supabase Auth (src/auth.php).
  */
 
 date_default_timezone_set('America/Sao_Paulo'); // datas no horário de Brasília
 define('RAIZ', dirname(__DIR__));
 carregar_env(RAIZ . '/.env');
-define('PYTHON', getenv('OMR_PYTHON') ?: 'python3');
+// No Windows, "python3" costuma ser só o atalho da Microsoft Store; o instalador cria "python".
+define('PYTHON', getenv('OMR_PYTHON') ?: (PHP_OS_FAMILY === 'Windows' ? 'python' : 'python3'));
 define('OMR_CLI', RAIZ . '/worker/omr_cli.py');
 define('LIMITE_REFORCO', (float)(getenv('LIMITE_REFORCO') ?: 60)); // % de acerto
 // Dificuldade observada pela proporção de acerto: acima de LIMITE_FACIL é fácil, abaixo de LIMITE_DIFICIL é difícil.
 define('LIMITE_FACIL', (float)(getenv('LIMITE_FACIL') ?: 70));
 define('LIMITE_DIFICIL', (float)(getenv('LIMITE_DIFICIL') ?: 30));
 define('PERIODO_ESCOLA', getenv('PERIODO_ESCOLA') ?: 'bimestre'); // bimestre, trimestre ou semestre
+define('TAMANHO_MAXIMO_ARQUIVO', 20 * 1024 * 1024); // por foto ou PDF enviado
+// Tipo real do arquivo (lido do conteúdo, não da extensão) => extensão usada na pasta temporária.
+const TIPOS_ACEITOS = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/tiff' => 'tif', 'application/pdf' => 'pdf'];
+
+require __DIR__ . '/src/servicos.php';
+require __DIR__ . '/src/auth.php';
 
 // Todo texto recebido vira UTF-8 válido antes de chegar ao banco (ver utf8_valido()).
 $_GET = utf8_valido($_GET);
 $_POST = utf8_valido($_POST);
+
+/**
+ * Erro que o professor (ou o app) consegue resolver: dado faltando, prova inexistente,
+ * foto ilegível. Na página vira uma mensagem; na API, JSON com o código HTTP $status.
+ * $detalhes vai junto no JSON da API (ex.: a lista de erros da revisão, o código do leitor).
+ */
+class ErroDoUsuario extends InvalidArgumentException
+{
+    public function __construct(string $mensagem, public readonly int $status = 422, public readonly array $detalhes = [])
+    {
+        parent::__construct($mensagem);
+    }
+}
 
 /**
  * O navegador sempre envia UTF-8, mas outros clientes (curl no Windows, o app) podem
@@ -94,22 +117,28 @@ function db(): PDO
 
 /* ------------------------------------------------------ Supabase Storage */
 
-/** Chamada à API do Storage com a chave secret (só no servidor). Devolve o JSON da resposta. */
-function storage(string $metodo, string $rota, string $corpo = '', string $tipo = 'application/json'): array
+/**
+ * Requisição ao Supabase (Storage ou Auth) com a chave secret, que só existe no servidor.
+ * Devolve [código HTTP, JSON da resposta (ou o texto, se não for JSON)].
+ */
+function supabase_http(string $metodo, string $rota, string $corpo = '', array $cabecalhos = [],
+                       string $tipo = 'application/json'): array
 {
     $chave = config('SUPABASE_SECRET_KEY');
-    $cabecalhos = ["apikey: $chave", "Content-Type: $tipo", 'x-upsert: true'];
-    if (str_starts_with($chave, 'eyJ')) { // chave antiga (service_role, JWT)
-        $cabecalhos[] = "Authorization: Bearer $chave";
+    $cabecalhos = array_merge(["apikey: $chave", "Content-Type: $tipo"], $cabecalhos);
+    if (str_starts_with($chave, 'eyJ') && !preg_grep('/^Authorization:/i', $cabecalhos)) {
+        $cabecalhos[] = "Authorization: Bearer $chave"; // chave antiga (service_role, JWT)
     }
-    $ch = curl_init(rtrim(config('SUPABASE_URL'), '/') . '/storage/v1/' . $rota);
+    $ch = curl_init(rtrim(config('SUPABASE_URL'), '/') . '/' . $rota);
     curl_setopt_array($ch, [
         CURLOPT_CUSTOMREQUEST => $metodo,
-        CURLOPT_POSTFIELDS => $corpo,
         CURLOPT_HTTPHEADER => $cabecalhos,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 60,
     ]);
+    if ($metodo !== 'GET') {
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $corpo);
+    }
     if (PHP_OS_FAMILY === 'Windows' && !ini_get('curl.cainfo')) {
         // O PHP do winget não traz lista de certificados: usa a do próprio Windows.
         curl_setopt($ch, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
@@ -119,11 +148,18 @@ function storage(string $metodo, string $rota, string $corpo = '', string $tipo 
     $falha = curl_error($ch);
     curl_close($ch);
     if ($resposta === false) {
-        throw new RuntimeException("Não foi possível acessar o Supabase Storage: $falha");
+        throw new RuntimeException("Não foi possível acessar o Supabase: $falha");
     }
     $dados = json_decode($resposta, true);
+    return [$status, is_array($dados) ? $dados : $resposta];
+}
+
+/** Chamada à API do Storage. Devolve o JSON da resposta. */
+function storage(string $metodo, string $rota, string $corpo = '', string $tipo = 'application/json'): array
+{
+    [$status, $dados] = supabase_http($metodo, 'storage/v1/' . $rota, $corpo, ['x-upsert: true'], $tipo);
     if ($status >= 300) {
-        $msg = is_array($dados) ? ($dados['message'] ?? $dados['error'] ?? $resposta) : $resposta;
+        $msg = is_array($dados) ? ($dados['message'] ?? $dados['error'] ?? json_encode($dados)) : $dados;
         throw new RuntimeException("O Supabase Storage recusou a operação ($status): $msg");
     }
     return is_array($dados) ? $dados : [];
@@ -424,10 +460,10 @@ function questoes_digitadas(string $texto): array
 {
     $letras = str_split(preg_replace('/[^A-Z]/', '', strtoupper($texto)));
     if ($letras === [''] || !$letras) {
-        throw new InvalidArgumentException('Digite as respostas do gabarito em ordem, por exemplo CBDAABCD.');
+        throw new ErroDoUsuario('Digite as respostas do gabarito em ordem, por exemplo CBDAABCD.');
     }
     if (max($letras) > 'E') {
-        throw new InvalidArgumentException('O gabarito digitado só pode usar as letras A a E.');
+        throw new ErroDoUsuario('O gabarito digitado só pode usar as letras A a E.');
     }
     return array_map(fn($l) => ['resposta' => $l, 'duvidosa' => false, 'disciplina' => null], $letras);
 }
@@ -439,16 +475,17 @@ function alternativas_digitadas(array $questoes): array
 }
 
 /** Grava a prova como rascunho, com uma linha por questão. Devolve o id. */
-function criar_rascunho(string $nome, int $ano, int $periodo, array $layout, array $questoes, ?string $imagemGabarito): int
+function criar_rascunho(string $nome, int $ano, int $periodo, array $layout, array $questoes, ?string $imagemGabarito,
+                        ?string $professorId = null): int
 {
     $modelo = modelo_do_caderno($layout['caderno'] ?? null);
     $pdo = db();
     $pdo->beginTransaction();
     try {
-        $st = $pdo->prepare("INSERT INTO provas (nome, ano, periodo, caderno, modelo, layout, imagem_gabarito, status)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, 'rascunho') RETURNING id");
+        $st = $pdo->prepare("INSERT INTO provas (nome, ano, periodo, caderno, modelo, layout, imagem_gabarito, status, criado_por)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, 'rascunho', ?) RETURNING id");
         $st->execute([$nome, $ano, $periodo, $layout['caderno'] ?? null, $modelo['chave'] ?? null,
-            json_encode(layout_do_leitor($layout), JSON_UNESCAPED_UNICODE), $imagemGabarito]);
+            json_encode(layout_do_leitor($layout), JSON_UNESCAPED_UNICODE), $imagemGabarito, $professorId]);
         $id = (int)$st->fetchColumn();
         $ins = $pdo->prepare('INSERT INTO questoes (prova_id, numero, resposta, disciplina, duvidosa) VALUES (?, ?, ?, ?, ?)');
         foreach (array_values($questoes) as $i => $q) {
@@ -879,6 +916,10 @@ function filtrar_questoes(array $estatisticas, string $disciplina, string $dific
         && ($dificuldade === '' || ($e['dificuldade'] ?? 'sem') === $dificuldade)));
 }
 
+/**
+ * Arquivos de um campo de $_FILES (um ou vários). Confere o tamanho e o tipo real pelo
+ * conteúdo (finfo): um arquivo renomeado para .jpg não passa. A extensão vem do tipo real.
+ */
 function upload_normalizado(array $campo): array
 {
     $arquivos = [];
@@ -886,21 +927,36 @@ function upload_normalizado(array $campo): array
         return $arquivos;
     }
     $nomes = (array)$campo['name'];
+    $limite = intdiv(TAMANHO_MAXIMO_ARQUIVO, 1024 * 1024) . ' MB';
     foreach ($nomes as $i => $nome) {
         $erro = ((array)$campo['error'])[$i];
         if ($erro === UPLOAD_ERR_NO_FILE) {
             continue;
         }
+        if ($erro === UPLOAD_ERR_INI_SIZE || $erro === UPLOAD_ERR_FORM_SIZE) {
+            throw new ErroDoUsuario("\"$nome\" passa do tamanho máximo de envio.", 413);
+        }
         if ($erro !== UPLOAD_ERR_OK) {
-            throw new RuntimeException("Falha no envio de \"$nome\" (código $erro). Verifique o tamanho máximo de upload.");
+            throw new ErroDoUsuario("Falha no envio de \"$nome\" (código $erro). Tente de novo.", 400);
         }
-        $ext = strtolower(pathinfo($nome, PATHINFO_EXTENSION));
-        if (!in_array($ext, ['png', 'jpg', 'jpeg', 'pdf', 'tif', 'tiff'], true)) {
-            throw new RuntimeException("\"$nome\" não é PNG, JPG, TIFF ou PDF.");
+        $tmp = ((array)$campo['tmp_name'])[$i];
+        if (filesize($tmp) > TAMANHO_MAXIMO_ARQUIVO) {
+            throw new ErroDoUsuario("\"$nome\" tem mais de $limite.", 413);
         }
-        $arquivos[] = ['nome' => $nome, 'tmp' => ((array)$campo['tmp_name'])[$i], 'ext' => $ext];
+        $ext = tipo_do_arquivo($tmp);
+        if ($ext === null) {
+            throw new ErroDoUsuario("\"$nome\" não é PNG, JPG, TIFF ou PDF.", 415);
+        }
+        $arquivos[] = ['nome' => $nome, 'tmp' => $tmp, 'ext' => $ext];
     }
     return $arquivos;
+}
+
+/** Extensão do arquivo pelo conteúdo (jpg, png, tif, pdf), ou null se não for um tipo aceito. */
+function tipo_do_arquivo(string $caminho): ?string
+{
+    $tipo = (new finfo(FILEINFO_MIME_TYPE))->file($caminho);
+    return TIPOS_ACEITOS[$tipo] ?? null;
 }
 
 /** Move o upload para a pasta temporária da requisição (o nome original fica legível para o Python). */
@@ -921,8 +977,7 @@ function buscar_prova(int $id): array
     $st->execute([$id]);
     $prova = $st->fetch();
     if (!$prova) {
-        http_response_code(404);
-        exit('Prova não encontrada.');
+        throw new ErroDoUsuario('Prova não encontrada.', 404);
     }
     $st = db()->prepare('SELECT numero, resposta, disciplina, dificuldade, habilidade, duvidosa
                          FROM questoes WHERE prova_id = ? ORDER BY numero');
@@ -956,6 +1011,10 @@ function cabecalho(string $titulo, string $voltar = ''): void
     echo '<header class="topo"><a class="marca" href="index.php">Corretor de provas</a>';
     if ($voltar) {
         echo '<a class="voltar" href="' . e($voltar) . '">Voltar</a>';
+    }
+    if ($professor = professor_logado()) {
+        echo '<form method="post" action="sair.php" class="sessao">' . campo_csrf()
+            . '<span>' . e($professor['email']) . '</span><button type="submit" class="secundario">Sair</button></form>';
     }
     echo '</header><h1>' . e($titulo) . '</h1>';
 }

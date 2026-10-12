@@ -2,77 +2,20 @@
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
 
+$professor = iniciar_pagina();
 $erro = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
-        $ano = (int)($_POST['ano'] ?? 0);
-        $periodo = (int)($_POST['periodo'] ?? 0);
-        if ($ano < 2000 || $ano > 2100) {
-            throw new InvalidArgumentException('Informe o ano letivo com quatro dígitos, por exemplo ' . date('Y') . '.');
-        }
-        if (!isset(periodos()[$periodo])) {
-            throw new InvalidArgumentException('Escolha o ' . PERIODO_ESCOLA . ' da prova.');
-        }
-
-        $digitado = trim($_POST['gabarito_digitado'] ?? '');
-        $imagem = upload_normalizado($_FILES['gabarito_imagem'] ?? []);
-        $imagemGabarito = null;
-
-        if ($imagem) {
-            // A foto do gabarito só é lida; fica guardada apenas a área de respostas anotada.
-            $leitura = ler_folhas([guardar_upload($imagem[0])])[0];
-            if (!$leitura['ok']) {
-                throw new RuntimeException('Não foi possível ler o gabarito: ' . $leitura['erro']
-                    . ' Tire outra foto ou digite as respostas.');
-            }
-            $layout = $leitura['layout'];
-            $modelo = modelo_do_caderno($layout['caderno'] ?? null);
-            $questoes = questoes_da_leitura($leitura, $modelo['disciplina'] ?? null);
-            if (isset($leitura['imagem_debug'])) {
-                $imagemGabarito = storage_enviar('anotadas', 'gabaritos/' . bin2hex(random_bytes(8)) . '.jpg',
-                    $leitura['imagem_debug']);
-            }
-        } elseif ($digitado !== '') {
-            // Sem foto, o formato e o caderno vêm da primeira folha de aluno lida.
-            $questoes = questoes_digitadas($digitado);
-            $layout = ['questoes' => count($questoes), 'alternativas' => alternativas_digitadas($questoes)];
-        } else {
-            throw new InvalidArgumentException('Envie a foto do gabarito ou digite as respostas.');
-        }
-
-        $nome = trim($_POST['nome'] ?? '') ?: sugerir_nome_prova($layout['caderno'] ?? null);
-        try {
-            $provaId = criar_rascunho($nome, $ano, $periodo, $layout, $questoes, $imagemGabarito);
-        } catch (Throwable $ex) {
-            if ($imagemGabarito) {
-                try {
-                    storage_apagar('anotadas', [$imagemGabarito]);
-                } catch (Throwable) {
-                    // O erro original é o que importa para o professor.
-                }
-            }
-            throw $ex;
-        }
-        redirecionar("gabarito.php?id=$provaId");
+        $fotos = upload_normalizado($_FILES['gabarito_imagem'] ?? []);
+        $nova = cadastrar_prova($_POST, $fotos, $professor['id']);
+        redirecionar("gabarito.php?id={$nova['id']}");
     } catch (Throwable $ex) {
         $erro = $ex->getMessage();
     }
 }
 
-$filtros = filtros_de_provas();
-[$where, $params, $escolhidos] = aplicar_filtros($filtros, $_GET);
-
-$st = db()->prepare("
-    SELECT p.id, p.nome, p.ano, p.periodo, p.status, p.criado_em,
-           COUNT(f.id) AS folhas,
-           COUNT(DISTINCT f.turma) AS turmas
-    FROM provas p LEFT JOIN folhas f ON f.prova_id = p.id AND f.erro IS NULL
-    WHERE $where
-    GROUP BY p.id ORDER BY p.ano DESC, p.periodo DESC NULLS LAST, p.id DESC
-");
-$st->execute($params);
-$provas = $st->fetchAll();
+[$provas, $filtros, $escolhidos] = listar_provas($_GET);
 $temProvas = (bool)db()->query('SELECT 1 FROM provas LIMIT 1')->fetchColumn();
 
 cabecalho('Provas');
@@ -127,6 +70,7 @@ cabecalho('Provas');
 <?php if ($erro): ?><p class="erro"><?= e($erro) ?></p><?php endif; ?>
 
 <form method="post" enctype="multipart/form-data" class="formulario">
+  <?= campo_csrf() ?>
   <div class="linha">
     <label>Ano letivo
       <input type="number" name="ano" min="2000" max="2100" required value="<?= e($_POST['ano'] ?? date('Y')) ?>">

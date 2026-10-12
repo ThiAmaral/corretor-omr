@@ -11,6 +11,8 @@ identifica o aluno: a turma é informada no momento do envio das folhas.
 
 ```
 web/        Backend + telas em PHP (cadastro da prova, envio, relatórios, revisão)
+  api/      API REST em JSON para o aplicativo (controlador frontal)
+  src/      Operações do sistema (servicos.php), login (auth.php) e rotas da API (api.php)
 worker/     Leitor óptico em Python/OpenCV (só lê a folha; não conhece o banco)
 supabase/   Migrações do banco (PostgreSQL no Supabase), aplicadas com a Supabase CLI
 ferramentas/ Gerador de folhas de teste e validador de precisão
@@ -68,6 +70,13 @@ na conta do GitHub. A conta precisa ter sido convidada como colaboradora.
    npx supabase link --project-ref <id-do-projeto>
    npx supabase db push
    ```
+4. Cadastre os professores. O sistema só abre com login, e só entra quem foi
+   cadastrado pela coordenação:
+   - **Authentication → Sign In / Providers**: desligue **Allow new users to
+     sign up** (ninguém cria conta sozinho);
+   - **Authentication → Users → Add user → Create new user**: e-mail e senha
+     do professor, com **Auto Confirm User** marcado. Ou **Send invitation**,
+     para o professor escolher a senha pelo e-mail.
 
 ### 4. Rodar
 
@@ -101,8 +110,11 @@ linha de comando, sem mexer no `php.ini`. Em outros sistemas:
 
 ```bash
 pip install -r worker/requirements.txt
-php -S localhost:8000 -t web
+php -S localhost:8000 -t web web/src/roteador.php
 ```
+
+O `web/src/roteador.php` faz o que o Apache faz no Docker: manda `/api/...`
+para a API e esconde as pastas `src/` e `testes/`.
 
 ## Ano letivo e filtros
 
@@ -115,7 +127,8 @@ se ajustam sozinhos.
 
 ## Testar o fluxo completo
 
-O cadastro não pede mais o formato da folha nem as áreas. A prova nasce como
+Entre com o e-mail e a senha de um professor cadastrado no Supabase. O
+cadastro não pede mais o formato da folha nem as áreas. A prova nasce como
 **rascunho**, passa pela tela **Revisar gabarito** e só recebe folhas depois de
 aprovada.
 
@@ -185,6 +198,54 @@ formato vindo da 1ª folha, resumos, prioridades e dificuldade observada), sem b
 ```bash
 php web/testes/regras.php
 ```
+
+## API (para o aplicativo)
+
+O aplicativo faz login direto no Supabase Auth (`signInWithPassword`, com a URL
+e a chave **publishable**) e manda o token em toda chamada:
+`Authorization: Bearer <token>`. O PHP confere o token com o Supabase
+(`GET /auth/v1/user`) e guarda a resposta por 5 minutos. A chave secret e a
+`DATABASE_URL` nunca saem do servidor.
+
+| Método | Rota | Uso |
+|---|---|---|
+| GET | `/api/config` | Períodos, disciplinas, dificuldades, limites e o professor do token |
+| GET | `/api/provas?ano=&periodo=` | Lista de provas |
+| POST | `/api/provas` | `multipart`: `ano`, `periodo`, `nome` (opcional) e a foto em `gabarito_imagem` ou as letras em `gabarito_digitado`. Devolve o rascunho e a leitura da foto, com as coordenadas das bolinhas |
+| GET | `/api/provas/{id}` | Prova, questões, catálogo de disciplinas e a imagem do gabarito (URL que vale 5 min) |
+| DELETE | `/api/provas/{id}` | Descarta um rascunho |
+| PUT | `/api/provas/{id}/questoes` | JSON `{"nome": ..., "questoes": [{"numero": 3, "resposta": "B", "disciplina": "Matemática", "dificuldade": "facil", "habilidade": "D07"}]}`. Só o que mudou; `null` apaga |
+| POST | `/api/provas/{id}/aprovar` | Aprova o rascunho (aceita o mesmo JSON do PUT) |
+| GET | `/api/provas/{id}/folhas?turma=` | Folhas lidas, com nota, e as recusadas |
+| POST | `/api/provas/{id}/folhas` | `multipart`: `turma` e a foto em `folha` (ou várias em `folhas[]`). Cada página volta com nota, acertos, questões a revisar e a leitura (coordenadas das bolinhas), ou com `erro` e `codigo`. Folha recusada não é gravada |
+| GET | `/api/provas/{id}/relatorio?turma=` | Resumo por turma (disciplina e dificuldade), prioridades de revisão, habilidades com acerto baixo, estatísticas por questão e dificuldade marcada × observada |
+| GET | `/api/folhas/{id}` | Folha, gabarito, níveis de preenchimento e a imagem anotada (URL que vale 5 min) |
+| PUT | `/api/folhas/{id}` | Revisão manual: `{"respostas": {"12": "B", "13": null}}` (só as que mudaram) ou a lista completa. `MULTIPLA` = marcação dupla |
+
+Erros saem como `{"erro": "mensagem para o professor"}`, às vezes com mais
+campos (`erros` na aprovação, `codigo` na leitura da foto). Códigos: 400
+requisição malformada, 401 sem login ou token vencido, 403 CSRF (só no painel),
+404 não encontrado, 405 método errado, 409 a situação da prova não permite (ex.:
+enviar folha antes de aprovar), 413 arquivo grande demais (20 MB por arquivo),
+415 não é JPEG, PNG, TIFF nem PDF (o tipo é lido do conteúdo, não da extensão),
+422 dado inválido, 500 erro no servidor (detalhe só no log).
+
+Exemplo com `curl`, depois de obter o token:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" -F turma=8A -F folha=@exemplos/ama/geradas_8A/8A_aluno01.jpg http://localhost:8000/api/provas/4/folhas
+```
+
+Para testar o fluxo todo com um professor de verdade (login no Supabase,
+cadastro por foto, revisão, aprovação, 20 folhas, relatório e revisão de uma
+folha), com o sistema rodando:
+
+```bash
+powershell -ExecutionPolicy Bypass -File ferramentas/testar_api.ps1 -Email professor@escola.br
+```
+
+O script pede a senha sem mostrá-la. A mesma sequência está na coleção do
+Postman em [docs/api.postman.json](docs/api.postman.json).
 
 ## Testar só o leitor (sem PHP)
 
@@ -310,8 +371,12 @@ Se não foi lida (`ok: false`), vêm `erro` (a mensagem para o professor) e
   de qualidade (`DESFOQUE_MAXIMO`, `LADO_MINIMO`, `BRILHO_MINIMO`).
 - Sem QR legível, a leitura fica mais lenta (~2 s por folha, contra ~0,2 s),
   por causa das novas tentativas com mais nitidez.
-- Sem autenticação nem proteção CSRF: é um protótipo para uso local. O login
-  com Supabase Auth chega na Fase 6.
+- Fora do computador local, o servidor precisa de **HTTPS**: o iOS só aceita
+  conexões seguras, e a senha e o token passam por elas. A hospedagem ainda
+  não foi escolhida.
+- Pelo painel web, o nome do arquivo enviado fica guardado. Se a escola
+  digitalizar as folhas com o nome do aluno no arquivo, ele aparece na lista de
+  folhas; o app manda nomes genéricos.
 - Cada questão tem uma disciplina só (tabela `questoes`).
 - A letra `L` do caderno como Língua Portuguesa ainda não foi confirmada; por
   enquanto é só uma sugestão, que o professor confere na revisão.

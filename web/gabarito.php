@@ -8,6 +8,7 @@ require __DIR__ . '/lib.php';
  * A mesma tela edita o gabarito de uma prova já ativa.
  */
 
+iniciar_pagina();
 $prova = buscar_prova((int)($_GET['id'] ?? 0));
 $id = (int)$prova['id'];
 $rascunho = $prova['status'] === 'rascunho';
@@ -18,26 +19,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $acao = $_POST['acao'] ?? 'salvar';
     try {
         if ($acao === 'descartar' && $rascunho) {
-            db()->prepare('DELETE FROM provas WHERE id = ?')->execute([$id]);
-            if ($prova['imagem_gabarito']) {
-                storage_apagar('anotadas', [$prova['imagem_gabarito']]);
-            }
+            descartar_rascunho($prova);
             redirecionar('index.php');
         }
-        $nome = trim($_POST['nome'] ?? '');
-        if ($nome === '') {
-            $erros[] = 'Dê um nome para a prova.';
-        }
-        // Prova ativa: as folhas já são corrigidas com este gabarito, então ele precisa estar completo.
-        $aprovar = $acao === 'aprovar' && $rascunho;
-        [$questoes, $errosRevisao] = validar_revisao($_POST['q'] ?? [], $prova, $aprovar || !$rascunho);
-        $erros = array_merge($erros, $errosRevisao);
+        $nome = (string)($_POST['nome'] ?? '');
+        $aprovar = $acao === 'aprovar';
+        [$questoes, $erros] = aprovar_gabarito($prova, $nome, (array)($_POST['q'] ?? []), $aprovar);
         if (!$erros) {
-            salvar_revisao($id, $nome, $questoes, $aprovar);
             redirecionar($rascunho && !$aprovar ? "gabarito.php?id=$id&salvo=1" : "prova.php?id=$id");
         }
         // Com erro, a tela volta com o que o professor escolheu, sem perder nada.
-        $prova['nome'] = $nome;
+        $prova['nome'] = trim($nome);
         $prova['questoes'] = $questoes;
     } catch (Throwable $ex) {
         $erros[] = $ex->getMessage();
@@ -84,6 +76,7 @@ cabecalho($rascunho ? 'Revisar gabarito' : 'Gabarito e dificuldade', $rascunho ?
 <?php endif; ?>
 
 <form method="post" class="revisao-gabarito<?= $prova['imagem_gabarito'] ? '' : ' sem-imagem' ?>" id="revisao">
+  <?= campo_csrf() ?>
   <?php if ($prova['imagem_gabarito']): ?>
     <figure>
       <img src="imagem.php?prova=<?= $id ?>" alt="Foto do gabarito lida, com a resposta encontrada em cada questão">
@@ -179,6 +172,7 @@ cabecalho($rascunho ? 'Revisar gabarito' : 'Gabarito e dificuldade', $rascunho ?
 
 <?php if ($rascunho): ?>
 <form method="post" class="descartar" data-confirmar="Descartar este rascunho? A leitura do gabarito será apagada.">
+  <?= campo_csrf() ?>
   <input type="hidden" name="acao" value="descartar">
   <button type="submit" class="link perigo">Descartar rascunho</button>
 </form>
