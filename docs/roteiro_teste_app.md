@@ -29,9 +29,9 @@ depois.
 | 3 | Fechar o app e abrir de novo | Continua logado |
 | 4 | Trocar o ano e a edição nos filtros | A lista muda; "Todas" mostra todas do ano |
 | 5 | **Nova prova** → conferir a edição | Aparecem "1ª edição" e "2ª edição", com a edição atual marcada |
-| 6 | Nome `TESTE app <data>` → **Fotografar o gabarito** | Pede a câmera (1ª vez); aparece o contorno da folha com 4 alvos para os quadrados pretos |
+| 6 | Nome `TESTE app <data>` → **Fotografar o gabarito** | Pede a câmera (1ª vez); aparecem só 4 cantos finos perto da borda e "Folha inteira na tela, bem iluminada. Pode estar um pouco torta." |
 | 7 | Apontar para o gabarito | Aparece "Caderno 2265M0801" em verde |
-| 8 | Tirar a foto (cronometrar até a revisão abrir) | Em poucos segundos abre "Revisar gabarito" com o caderno e "26 questões em 4 blocos" |
+| 8 | Tirar a foto com a folha um pouco torta (cronometrar até a revisão abrir) | "Procurando os 4 quadrados pretos..." e depois "Lendo o gabarito..."; em poucos segundos abre "Revisar gabarito" com o caderno e "26 questões em 4 blocos" |
 | 9 | Conferir o recorte na revisão | Só a área de respostas (sem o nome); um círculo verde sobre cada bolinha marcada; "Ver a área de respostas inteira" amplia |
 | 10 | Tocar numa questão e trocar a resposta | O círculo muda de lugar; o cartão aberto fica azul |
 | 11 | **Marcar várias questões de uma vez**: 1 a 9 Fácil, 10 a 18 Médio, 19 a 26 Difícil | "Aplicado às questões ..."; cada cartão mostra a dificuldade |
@@ -42,6 +42,7 @@ depois.
 | 16 | Fotografar a folha do outro caderno | Aviso em vermelho antes da foto (se o QR for lido) ou "Folha de outra prova" depois; o contador não muda. Com o modelo antigo: "Não encontrei os 4 quadrados pretos..." |
 | 17 | Fotografar as 5 folhas, uma por vez (cronometrar a turma toda) | Cada uma mostra a nota (ex.: 18/26) e as questões a conferir; o contador sobe |
 | 17a | Fotografar uma folha de cabeça para baixo | Lida normalmente, com a mesma nota |
+| 17b | Fotografar com a folha longe (ocupando metade da tela) e depois bem longe | Metade da tela: lida. Bem longe: aviso na hora para aproximar, sem enviar nada |
 | 18 | Na folha com marcação fraca, corrigir a questão e **Salvar e próxima** | A correção é aceita e a câmera volta |
 | 19 | Numa folha, tocar **Ver todas** | Mostra as 26 questões, com certo/errado |
 | 20 | **Concluir e ver resultado** | Acerto geral, por dificuldade, por disciplina e as prioridades |

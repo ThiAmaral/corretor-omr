@@ -723,7 +723,9 @@ resultado. O app fica em `mobile/` e consome a API da Fase 6.
 | 7.8 | Escanear turma: câmera aberta, nota na hora, aviso de outro caderno, confirmar/corrigir, contador | ✅ (navegador) | A câmera lê o QR ao vivo e avisa antes da foto se o caderno for outro; o servidor também recusa. Confirmar ou corrigir as duvidosas ("Ver todas" para as 26). O contador vem do servidor (`folhas_da_turma`). Câmera ao vivo e QR: no aparelho (7.14) |
 | 7.9 | Resultado da turma: geral, disciplina, dificuldade e prioridades | ✅ | Mesmos números do painel e da API (ver o teste). Lista das folhas da turma; cada uma abre a correção manual |
 | 7.10 | Foto reduzida para ~1600 px antes do envio | ✅ | Lado menor em 1600 px, JPEG 85% (`mobile/src/lib/foto.ts`). Gabarito de teste: 1771×2370 → 1600×2141 |
-| 7.11 | Moldura-guia na câmera (4 quadrados pretos) | ✅ (código) | Moldura tracejada com os 4 cantos; fica vermelha quando o QR é de outro caderno. Conferir o enquadramento no aparelho |
+| 7.11 | Guia de enquadramento na câmera | ✅ (código) | A moldura fixa com 4 alvos dificultava a foto (Thiago, 2026-10-18) e virou 4 cantoneiras finas perto da borda: a folha é alinhada depois da foto pelo recorte (7.15). Ficam vermelhas quando o QR é de outro caderno. Conferir no aparelho (7.14) |
+| 7.19 | Aviso do recorte na hora, antes do envio | ✅ (navegador) | Etapas na tela ("Procurando os 4 quadrados pretos...", "Lendo a folha..."). Sem os 4 quadrados, ou com o marcador menor que 11 px, o app avisa na hora e não envia nada. A área mínima dos marcadores no celular caiu de 8% para 2% da foto: com 8%, uma folha ocupando metade da tela não era aceita |
+| 7.20 | Marcação dinâmica ao vivo e foto automática | ⏳ | Destacar os 4 quadrados na imagem da câmera e fotografar sozinho quando ficarem estáveis. Precisa de processar os quadros da câmera (`react-native-vision-camera` com frame processor), que não roda no Expo Go: fica para o development build (7.12) |
 | 7.12 | Scanner de documento (ML Kit / VisionKit) no development build | 🔄 | `react-native-document-scanner-plugin` com o plugin do Expo. Só existe no development build: o app detecta o módulo e mostra o botão "Scanner". Falta gerar o build e testar |
 | 7.13 | Roteiro de teste manual `docs/roteiro_teste_app.md` | ✅ | 24 passos, com tabela para Android e iPhone |
 | 7.14 | Teste num Android e num iPhone de verdade | 🔄 | Android com Expo Go (2026-10-12): login real ok; dois erros achados e corrigidos (envio da foto e moldura). Falta repetir o roteiro inteiro e o iPhone |
@@ -840,6 +842,7 @@ O mesmo algoritmo está em Python (`omr.recortar_para_envio`,
 
 ### Pendências e riscos
 
+- **Marcação ao vivo (7.20)**: pendente, depende do development build (7.12).
 - **Recorte no aparelho (7.14)**: medir o tempo do recorte num celular comum
   (no navegador do computador foram ~2 a 4 s) e conferir a leitura do QR com o
   leitor do Android e do iPhone. No iPhone, `scanFromURLAsync` não foi testado.
@@ -928,4 +931,16 @@ O mesmo algoritmo está em Python (`omr.recortar_para_envio`,
   girado era recusado no TypeScript (medida da caixa girada dependia do tamanho);
   a medida passou a seguir a do contorno do OpenCV. 150 recortes antigos
   apagados do bucket `folhas`.
+- **2026-10-18** — A moldura fixa da câmera dificultava as fotos (Thiago).
+  Como o recorte já acha e nivela a folha depois da foto, a moldura virou 4
+  cantoneiras discretas, com texto curto, e o app mostra as etapas e avisa na
+  hora quando não acha os quadrados ou a folha está longe demais. No teste,
+  uma folha ocupando ~56% da largura da foto era recusada: a área mínima dos
+  marcadores (8% da foto, pensada para a foto inteira no servidor) passou a
+  2% no celular (`AREA_MINIMA`, e `AREA_MINIMA_APP` no Python). Medido no
+  Node: a folha é achada a partir de ~30% da largura da foto, em até ~0,15 s.
+  No app web: folha a 42% lida (19/26, igual à foto de perto); a 30%, aviso
+  para aproximar. Marcação ao vivo e foto automática ficam para o development
+  build (7.20). Não foi possível ver as cantoneiras no navegador do painel (ele
+  bloqueia a câmera): conferir no aparelho.
 

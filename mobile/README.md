@@ -23,8 +23,8 @@ Outras partes: `src/lib/api.ts` (cliente da API, token e erros),
 `src/lib/foto.ts` (redução para 1600 px e scanner do sistema),
 `src/lib/recorte.ts` e `src/lib/marcadores.ts` (recorte da folha no celular),
 `src/lib/fotosLocais.ts` (fotos originais na pasta privada do app),
-`src/componentes/CameraFolha.tsx` (câmera com moldura-guia e leitura do QR ao
-vivo) e `src/componentes/FotoComMarcacoes.tsx` (leitura desenhada sobre a foto).
+`src/componentes/CameraFolha.tsx` (câmera com cantoneiras discretas e leitura
+do QR ao vivo; a folha é alinhada depois da foto) e `src/componentes/FotoComMarcacoes.tsx` (leitura desenhada sobre a foto).
 
 ## O que sai do celular
 
@@ -68,8 +68,9 @@ npx expo start
 ```
 
 Instale o Expo Go no celular e leia o QR que aparece no terminal. O celular e
-o computador precisam estar na mesma rede. O app usa a câmera própria (com a
-moldura-guia) e a galeria.
+o computador precisam estar na mesma rede. O app usa a câmera própria e a galeria. Não é preciso encaixar a folha num
+contorno: basta a folha inteira na tela; o app acha os 4 quadrados e endireita
+a folha depois da foto.
 
 **Com um development build** (necessário para o scanner de documento do
 sistema, ML Kit no Android e VisionKit no iOS):

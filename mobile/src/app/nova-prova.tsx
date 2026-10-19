@@ -50,12 +50,14 @@ export default function NovaProva() {
 
   async function aoFotografar(capturada: FotoCapturada) {
     setModo('escolher');
-    setEnviando('Lendo o gabarito...');
+    setEnviando('Procurando os 4 quadrados pretos...');
     let original: Foto | null = null;
     try {
       // Só o recorte (área de respostas + QR) vai para o servidor; a foto fica no celular.
       original = await prepararFoto(capturada);
-      await cadastrar({ recorte: await recortarFolha(original), original });
+      const recorte = await recortarFolha(original);
+      setEnviando('Lendo o gabarito...');
+      await cadastrar({ recorte, original });
     } catch (e) {
       setEnviando(null);
       setErro(e instanceof ErroRecorte ? e.message : `Não foi possível preparar a foto: ${String(e)}`);

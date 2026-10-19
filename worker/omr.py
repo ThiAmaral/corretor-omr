@@ -230,7 +230,7 @@ def _quadrilatero_valido(cantos: np.ndarray) -> bool:
     return all(abs(a - 90) <= 30 for a in _angulos_internos(cantos))
 
 
-def localizar_marcadores(normal: np.ndarray):
+def localizar_marcadores(normal: np.ndarray, area_minima: float = 0.08):
     """Entre os candidatos, os 4 que formam o maior quadrilátero 'quase
     retangular' com quadrados de tamanho parecido. Se só 3 forem achados (um
     dedo ou uma dobra cobrindo um canto), o 4º é estimado completando o
@@ -243,7 +243,7 @@ def localizar_marcadores(normal: np.ndarray):
                   if not any(o is not c and math.hypot(o[0] - c[0], o[1] - c[1]) < 4 * max(o[2], c[2])
                              for o in candidatos)]
     candidatos = sorted(candidatos, key=lambda c: -c[2])[:24]
-    area_minima = 0.08 * normal.size  # a área de respostas não é minúscula
+    area_minima = area_minima * normal.size  # a área de respostas não é minúscula
     melhor, melhor_area = None, area_minima
     for combo in itertools.combinations(candidatos, 4):
         lados = [c[2] for c in combo]
@@ -872,6 +872,7 @@ def _ler_folha(cinza: np.ndarray, normal: np.ndarray, marcadores, layout: Layout
 
 MARGEM_RECORTE = 1.2  # folga em volta dos centros dos marcadores, em lados de marcador
 MARGEM_ESTIMADO = 2.5  # com um canto estimado, que pode errar alguns pixels
+AREA_MINIMA_APP = 0.02  # no celular, a área dos marcadores pode ser bem menor que na foto inteira
 AREA_MINIMA_RECORTE = 0.45  # os marcadores ocupam quase todo o recorte; a foto inteira, não
 QR_MAXIMO_RECORTE = 0.25  # o recorte do QR é pequeno perto da área de respostas
 
@@ -941,7 +942,8 @@ def recortar_para_envio(imagem_bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray 
     faixa onde ele fica; achou, o lado de cima é esse e a faixa é o recorte do QR.
     Senão, tenta de cabeça para baixo. 4. Sem QR, vale o lado mais perto do alto."""
     cinza = _cinza(imagem_bgr)
-    marcadores = localizar_marcadores(normalizar_iluminacao(cinza))
+    # No celular a folha pode estar mais longe; o tamanho do marcador é conferido no servidor.
+    marcadores = localizar_marcadores(normalizar_iluminacao(cinza), AREA_MINIMA_APP)
     if not marcadores:
         raise ErroLeitura("Não encontrei os 4 quadrados pretos dos cantos da área de respostas.", "sem_marcadores")
     cantos, lado, estimado = marcadores

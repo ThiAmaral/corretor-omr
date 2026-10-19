@@ -10,7 +10,8 @@ import { Botao, cor } from './ui';
 export type FotoCapturada = { uri: string; width?: number; height?: number };
 
 /**
- * Câmera para o gabarito e as folhas: moldura-guia para os 4 quadrados pretos, leitura
+ * Câmera para o gabarito e as folhas: cantoneiras discretas (a folha é alinhada depois da
+ * foto, em lib/recorte.ts, então não precisa ser encaixada num contorno), leitura
  * do QR ao vivo (avisa na hora se a folha é de outro caderno), galeria e, no development
  * build, o scanner de documento do sistema. O resultado de cada folha aparece em `painel`,
  * por cima da câmera, que continua aberta.
@@ -97,7 +98,7 @@ export function CameraFolha({
         />
       ) : null}
 
-      {permissao?.granted && <Moldura alerta={outroCaderno} />}
+      {permissao?.granted && <Cantoneiras alerta={outroCaderno} />}
 
       <SafeAreaView style={{ flex: 1, justifyContent: 'space-between' }} pointerEvents="box-none">
         <View style={e.barraTopo}>
@@ -123,7 +124,7 @@ export function CameraFolha({
             <Text style={e.instrucao}>
               {outroCaderno
                 ? `Esta folha é do caderno ${qrRecente}, não do ${cadernoEsperado}.`
-                : 'Encaixe a folha inteira no contorno, com cada quadrado preto dentro de um alvo. Folha reta e bem iluminada.'}
+                : 'Folha inteira na tela, bem iluminada. Pode estar um pouco torta.'}
             </Text>
           )}
           {qrRecente && !outroCaderno ? <Text style={e.qr}>Caderno {qrRecente}</Text> : null}
@@ -159,55 +160,30 @@ export function CameraFolha({
   );
 }
 
-/*
- * Posição dos 4 quadrados pretos na folha AMA, em fração da largura e da altura da página
- * (medida na folha em branco, exemplos/ama). Eles marcam a área de respostas, na metade de
- * baixo da folha; o QR fica acima dela, à esquerda.
- */
-const QUADRADOS_AMA: [number, number][] = [
-  [0.053, 0.578],
-  [0.947, 0.578],
-  [0.059, 0.838],
-  [0.943, 0.838],
-];
-const PROPORCAO_A4 = 210 / 297;
 /** Espaço da tela ocupado pela barra de cima, pelas instruções e pelos botões. */
-const ESPACO_DOS_CONTROLES = 260;
+const ESPACO_DE_CIMA = 150;
+const ESPACO_DE_BAIXO = 170;
 
-/** Contorno da folha inteira, com um alvo onde cada quadrado preto deve ficar. */
-function Moldura({ alerta }: { alerta: boolean }) {
+/**
+ * Só uma dica de enquadramento: 4 cantos finos perto da borda. O recorte acha os 4
+ * quadrados pretos em qualquer lugar da foto, com a folha torta ou de cabeça para baixo.
+ * Ficam vermelhos quando o QR visto é de outro caderno.
+ */
+function Cantoneiras({ alerta }: { alerta: boolean }) {
   const { width, height } = useWindowDimensions();
-  const corBorda = alerta ? '#FF6B5B' : 'rgba(255,255,255,0.9)';
-  const largura = Math.min(width * 0.92, (height - ESPACO_DOS_CONTROLES) * PROPORCAO_A4);
-  const alvo = Math.max(28, largura * 0.08);
+  const corLinha = alerta ? '#FF6B5B' : 'rgba(255,255,255,0.55)';
+  const tamanho = Math.min(width, height) * 0.08;
+  const margem = Math.max(12, width * 0.04);
+  const canto = { position: 'absolute' as const, width: tamanho, height: tamanho, borderColor: corLinha };
   return (
-    <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
-      <View
-        style={{
-          width: largura,
-          height: largura / PROPORCAO_A4,
-          borderWidth: 1.5,
-          borderColor: corBorda,
-          borderStyle: 'dashed',
-          borderRadius: 4,
-        }}
-      >
-        <View
-          style={[
-            e.areaRespostas,
-            { left: largura * 0.053, right: largura * 0.053, top: `${57.8}%`, bottom: `${100 - 83.8}%`, borderColor: corBorda },
-          ]}
-        />
-        {QUADRADOS_AMA.map(([x, y]) => (
-          <View
-            key={`${x}-${y}`}
-            style={[
-              e.alvo,
-              { width: alvo, height: alvo, left: x * largura - alvo / 2, top: y * (largura / PROPORCAO_A4) - alvo / 2, borderColor: corBorda },
-            ]}
-          />
-        ))}
-      </View>
+    <View
+      pointerEvents="none"
+      style={{ position: 'absolute', left: margem, right: margem, top: ESPACO_DE_CIMA, bottom: ESPACO_DE_BAIXO }}
+    >
+      <View style={[canto, { left: 0, top: 0, borderLeftWidth: 2, borderTopWidth: 2 }]} />
+      <View style={[canto, { right: 0, top: 0, borderRightWidth: 2, borderTopWidth: 2 }]} />
+      <View style={[canto, { left: 0, bottom: 0, borderLeftWidth: 2, borderBottomWidth: 2 }]} />
+      <View style={[canto, { right: 0, bottom: 0, borderRightWidth: 2, borderBottomWidth: 2 }]} />
     </View>
   );
 }
@@ -253,6 +229,4 @@ const e = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  alvo: { position: 'absolute', borderWidth: 3, borderRadius: 3 },
-  areaRespostas: { position: 'absolute', borderWidth: 1, borderStyle: 'dotted', opacity: 0.6 },
 });

@@ -14,7 +14,7 @@ import type { Folha, Prova, ResultadoEnvio } from '@/lib/tipos';
 
 type Estado =
   | { tipo: 'pronto' }
-  | { tipo: 'lendo' }
+  | { tipo: 'lendo'; etapa: string }
   | { tipo: 'lida'; folha: Folha; correcoes: Record<number, string | null>; todas: boolean }
   | { tipo: 'recusada'; mensagem: string; codigo: string | null };
 
@@ -60,13 +60,14 @@ export default function EscanearTurma() {
   const gabarito = prova.questoes.map((q) => q.resposta);
 
   async function aoFotografar(capturada: FotoCapturada) {
-    setEstado({ tipo: 'lendo' });
+    setEstado({ tipo: 'lendo', etapa: 'Procurando os 4 quadrados pretos...' });
     setErroSalvar(null);
     let foto: Foto | null = null;
     try {
       // Só o recorte (área de respostas + QR) vai para o servidor; a foto fica no celular.
       foto = await prepararFoto(capturada);
       const recorte = await recortarFolha(foto);
+      setEstado({ tipo: 'lendo', etapa: 'Lendo a folha...' });
       enviadas.current += 1;
       const r = await api.enviarFolha(id, turma, recorte, enviadas.current);
       apagar(recorte.area.uri);
@@ -121,7 +122,7 @@ export default function EscanearTurma() {
   if (estado.tipo === 'lendo') {
     painel = (
       <View style={[estilos.cartao, { alignItems: 'center' }]}>
-        <Text style={estilos.rotulo}>Lendo a folha...</Text>
+        <Text style={estilos.rotulo}>{estado.etapa}</Text>
       </View>
     );
   } else if (estado.tipo === 'recusada') {

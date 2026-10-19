@@ -15,6 +15,12 @@ export type ImagemCinza = { largura: number; altura: number; dados: Uint8Array }
 export const MARGEM_RECORTE = 1.2;
 export const MARGEM_ESTIMADO = 2.5;
 /**
+ * Área mínima do quadrilátero dos marcadores, em fração da foto. O leitor do servidor usa
+ * 0,08 (a área de respostas ocupa boa parte da foto); no celular a folha pode estar mais
+ * longe, e quem decide se a resolução basta é o tamanho do marcador (LADO_MINIMO, recorte.ts).
+ */
+export const AREA_MINIMA = 0.02;
+/**
  * Faixa do QR, em larguras da área a partir do marcador de cima à esquerda (a folha em pé).
  * O QR vai de -0,47 a -0,38, o código impresso termina em -0,36 e o rótulo "Nome do(a)
  * estudante" começa em -0,30: a faixa termina antes do nome. Ela é o recorte do QR enviado.
@@ -282,7 +288,7 @@ export function localizarMarcadores(normal: ImagemCinza): Marcadores | null {
     (c) => !candidatos.some((o) => o !== c && Math.hypot(o.x - c.x, o.y - c.y) < 4 * Math.max(o.lado, c.lado)),
   );
   candidatos = candidatos.sort((a, b) => b.lado - a.lado).slice(0, 24);
-  const areaMinima = 0.08 * w * h;
+  const areaMinima = AREA_MINIMA * w * h;
   let melhor: Marcadores | null = null;
   let melhorArea = areaMinima;
   for (const combo of combinacoes(candidatos, 4)) {

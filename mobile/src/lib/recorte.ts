@@ -39,6 +39,8 @@ export class ErroRecorte extends Error {
 
 /** Lado maior da cópia analisada: rápido no celular e o bastante para achar os marcadores. */
 const LADO_ANALISE = 1000;
+/** Lado do marcador (px, na foto de envio) abaixo do qual o leitor recusa por pouca resolução. */
+const LADO_MINIMO = 11;
 
 export async function recortarFolha(foto: Foto): Promise<Recorte> {
   const temporarios: string[] = [];
@@ -46,8 +48,14 @@ export async function recortarFolha(foto: Foto): Promise<Recorte> {
     let m = await acharMarcadores(foto, temporarios);
     if (!m) {
       throw new ErroRecorte(
-        'Não encontrei os 4 quadrados pretos dos cantos da área de respostas. Fotografe a folha inteira, ' +
-          'de frente, sem cobrir os cantos. O app lê só a folha AMA.',
+        'Não vi os 4 quadrados pretos da área de respostas. Mostre a folha inteira, ocupando quase ' +
+          'toda a tela, sem cobrir os cantos e sem sombra forte, e tire outra foto. O app lê só a folha AMA.',
+      );
+    }
+    if (m.lado < LADO_MINIMO) {
+      throw new ErroRecorte(
+        'A folha ficou pequena na foto. Aproxime o celular até a folha ocupar quase toda a tela.',
+        'pouca_resolucao',
       );
     }
     // Nivela com o lado comprido mais perto do alto da foto em cima; depois acha de novo.
