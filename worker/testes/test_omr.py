@@ -269,3 +269,66 @@ def test_modelo_antigo_continua_funcionando():
     obtido = [{"marcada": r["resposta"], "branco": None, "multipla": "MULTIPLA"}[r["situacao"]]
               for r in leitura["respostas"]]
     assert obtido == [e if not (e and e.endswith("?")) else o for e, o in zip(esperado, obtido)]
+
+
+# ---------------------------------------------------------------- Recorte feito no app
+
+def _como_lido(leitura):
+    return [{"marcada": r["resposta"], "branco": None, "multipla": "MULTIPLA"}[r["situacao"]]
+            for r in leitura["respostas"]]
+
+
+def _confere(esperado, leitura):
+    obtido = _como_lido(leitura)
+    assert obtido == [e if not (e and e.endswith("?")) else o for e, o in zip(esperado, obtido)]
+    fracas = [i for i, e in enumerate(esperado) if e and e.endswith("?")]
+    assert all(leitura["respostas"][i]["duvidosa"] for i in fracas)
+
+
+def test_recorte_le_todas_as_folhas_como_a_foto_inteira():
+    """O app só envia a área e o QR; a leitura é a mesma da foto inteira."""
+    esperado = esperado_ama()
+    for nome, resp in esperado["folhas"].items():
+        area, qr, _ = omr.recortar_para_envio(cv2.imread(os.path.join(AMA, nome)))
+        leitura = omr.ler_recorte(area, qr)
+        assert leitura["layout"]["blocos"] == [7, 7, 7, 5], nome
+        _confere(resp, leitura)
+
+
+def test_recorte_de_folha_de_cabeca_para_baixo(gabarito_ama):
+    area, qr, caderno = omr.recortar_para_envio(cv2.rotate(gabarito_ama, cv2.ROTATE_180))
+    assert caderno == CADERNO and qr is not None
+    leitura = omr.ler_recorte(area, qr)
+    assert leitura["caderno"] == CADERNO
+    assert respostas(leitura)[:len(esperado_ama()["gabarito"])] == esperado_ama()["gabarito"]
+
+
+def test_recorte_do_qr_fica_fora_do_nome(gabarito_ama):
+    """O QR recortado é pequeno e termina antes da faixa do nome do aluno."""
+    area, qr, _ = omr.recortar_para_envio(gabarito_ama)
+    assert qr is not None
+    assert qr.shape[0] < 0.3 * area.shape[1] and qr.shape[1] < 0.3 * area.shape[1]
+    assert omr.ler_qr_recortado(qr) == CADERNO
+
+
+def test_foto_inteira_nao_passa_por_recorte(gabarito_ama):
+    with pytest.raises(omr.ErroLeitura) as e:
+        omr.ler_recorte(gabarito_ama)
+    assert e.value.codigo == "nao_recorte"
+
+
+def test_recorte_sem_qr_usa_o_caderno_lido_pelo_app(gabarito_ama):
+    area, _, _ = omr.recortar_para_envio(gabarito_ama)
+    assert omr.ler_recorte(area, None, caderno_do_app=CADERNO)["caderno"] == CADERNO
+    lay = omr.Layout(blocos=[7, 7, 7, 5], caderno="9999X0000")
+    with pytest.raises(omr.ErroLeitura) as e:
+        omr.ler_recorte(area, None, lay, caderno_do_app=CADERNO)
+    assert e.value.codigo == "caderno_diferente"
+
+
+def test_imagem_guardada_tem_o_qr_em_cima():
+    anotada = np.zeros((300, 900, 3), np.uint8)
+    qr = np.full((120, 100, 3), 128, np.uint8)
+    junta = omr.compor_com_qr(anotada, qr)
+    assert junta.shape[1] == 900 and junta.shape[0] == 300 + 150 + 20
+    assert omr.compor_com_qr(anotada, None) is anotada

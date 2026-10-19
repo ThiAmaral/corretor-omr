@@ -361,6 +361,24 @@ teste('rotas: função certa, id numérico, 404 e 405', function () {
     igual(['GET', 'DELETE'], $ex->detalhes['permitidos']);
 });
 
+teste('edições do simulado no lugar dos bimestres', function () {
+    igual('edicao', PERIODO_ESCOLA);
+    igual([1 => '1ª edição', 2 => '2ª edição'], periodos());
+    igual('Edição', nome_da_divisao());
+    igual('2ª edição', nome_periodo(2));
+    igual('4ª edição', nome_periodo(4)); // prova antiga, cadastrada como 4º bimestre
+    igual('–', nome_periodo(null));
+});
+
+teste('CORS só para as origens configuradas', function () {
+    igual([], cabecalhos_cors('http://localhost:8081', ''));
+    igual([], cabecalhos_cors('', 'http://localhost:8081'));
+    igual([], cabecalhos_cors('http://outro.site', 'http://localhost:8081'));
+    $c = cabecalhos_cors('http://localhost:8081', 'http://localhost:19006, http://localhost:8081');
+    igual('Access-Control-Allow-Origin: http://localhost:8081', $c[0]);
+    igual('Vary: Origin', $c[1]);
+});
+
 teste('token Bearer do cabeçalho', function () {
     igual('abc.def.ghi', token_do_cabecalho(['HTTP_AUTHORIZATION' => 'Bearer abc.def.ghi']));
     igual('abc', token_do_cabecalho(['REDIRECT_HTTP_AUTHORIZATION' => 'bearer   abc ']));
@@ -481,6 +499,12 @@ teste('folha corrigida no formato da API', function () {
 teste('data do banco em ISO 8601 no horário de Brasília', function () {
     igual('2026-10-12T11:03:00-03:00', data_iso('2026-10-12 14:03:00.123456+00'));
     igual(null, data_iso(null));
+});
+
+teste('nome guardado da folha é genérico, nunca o original', function () {
+    igual('7A_folha03.jpg', nome_generico('7A', 3, 'jpg'));
+    igual('9Z-APP_folha12.pdf', nome_generico('9Z-APP', 12, 'pdf'));
+    igual('7Atarde_folha01.jpg', nome_generico('7A tarde/../', 1, 'jpg'));
 });
 
 echo "$testes testes passaram.\n";

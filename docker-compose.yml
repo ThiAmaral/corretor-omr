@@ -8,4 +8,5 @@ services:
       LIMITE_REFORCO: "60"         # % de acerto abaixo do qual a questão ou o aluno precisa de reforço
       LIMITE_FACIL: "70"           # dificuldade observada: acima disto é fácil
       LIMITE_DIFICIL: "30"         # e abaixo disto é difícil
-      PERIODO_ESCOLA: "bimestre"   # bimestre, trimestre ou semestre
+      PERIODO_ESCOLA: "edicao"     # edicao (do simulado), bimestre, trimestre ou semestre
+      EDICOES_SIMULADO: "2"        # quantas edições aparecem no cadastro

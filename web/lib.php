@@ -5,7 +5,8 @@ declare(strict_types=1);
  * Núcleo do backend PHP.
  * - Guarda provas, questões e folhas no PostgreSQL do Supabase (DATABASE_URL).
  *   O esquema vem das migrações em supabase/migrations.
- * - Guarda as imagens no Supabase Storage (buckets privados "folhas" e "anotadas").
+ * - Guarda as imagens no Supabase Storage (bucket privado "anotadas"): só a área das
+ *   bolinhas anotada, com o QR em cima. O bucket "folhas" não é mais usado.
  * - Chama o leitor óptico em Python (worker/omr_cli.py). Na versão final essa
  *   chamada vira uma mensagem no RabbitMQ; o formato do JSON continua o mesmo.
  * - Faz a correção: o Python só lê, quem compara com o gabarito é o PHP.
@@ -24,7 +25,9 @@ define('LIMITE_REFORCO', (float)(getenv('LIMITE_REFORCO') ?: 60)); // % de acert
 // Dificuldade observada pela proporção de acerto: acima de LIMITE_FACIL é fácil, abaixo de LIMITE_DIFICIL é difícil.
 define('LIMITE_FACIL', (float)(getenv('LIMITE_FACIL') ?: 70));
 define('LIMITE_DIFICIL', (float)(getenv('LIMITE_DIFICIL') ?: 30));
-define('PERIODO_ESCOLA', getenv('PERIODO_ESCOLA') ?: 'bimestre'); // bimestre, trimestre ou semestre
+define('PERIODO_ESCOLA', getenv('PERIODO_ESCOLA') ?: 'edicao'); // edicao (do simulado), bimestre, trimestre ou semestre
+// Quantas edições do simulado aparecem no cadastro (com PERIODO_ESCOLA=edicao). Aumente quando houver mais.
+define('EDICOES_SIMULADO', max(1, (int)(getenv('EDICOES_SIMULADO') ?: 2)));
 define('TAMANHO_MAXIMO_ARQUIVO', 20 * 1024 * 1024); // por foto ou PDF enviado
 // Tipo real do arquivo (lido do conteúdo, não da extensão) => extensão usada na pasta temporária.
 const TIPOS_ACEITOS = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/tiff' => 'tif', 'application/pdf' => 'pdf'];
@@ -236,26 +239,42 @@ function fmt_pct(?float $v): string
 
 /* ------------------------------------------------ Ano letivo e filtros */
 
-/** [1 => '1º bimestre', ...] conforme a divisão do ano letivo da escola. */
+/** [1 => '1ª edição', ...] ou [1 => '1º bimestre', ...], conforme PERIODO_ESCOLA. */
 function periodos(): array
 {
     $quantos = match (PERIODO_ESCOLA) {
+        'edicao' => EDICOES_SIMULADO,
         'bimestre' => 4,
         'trimestre' => 3,
         'semestre' => 2,
-        default => throw new RuntimeException('PERIODO_ESCOLA deve ser bimestre, trimestre ou semestre.'),
+        default => throw new RuntimeException('PERIODO_ESCOLA deve ser edicao, bimestre, trimestre ou semestre.'),
     };
     $lista = [];
     for ($n = 1; $n <= $quantos; $n++) {
-        $lista[$n] = "{$n}º " . PERIODO_ESCOLA;
+        $lista[$n] = rotulo_do_periodo($n);
     }
     return $lista;
 }
 
-/** Rótulo do período; números que não existem no formato atual (a escola mudou de formato) aparecem como "período". */
+/** 2 -> "2ª edição" ou "2º bimestre". */
+function rotulo_do_periodo(int $n): string
+{
+    return PERIODO_ESCOLA === 'edicao' ? "{$n}ª edição" : "{$n}º " . PERIODO_ESCOLA;
+}
+
+/** Nome da divisão para títulos e mensagens: "Edição", "Bimestre"... */
+function nome_da_divisao(): string
+{
+    return PERIODO_ESCOLA === 'edicao' ? 'Edição' : ucfirst(PERIODO_ESCOLA);
+}
+
+/**
+ * Rótulo do período de uma prova. Número fora da lista atual (prova de uma edição que
+ * deixou de aparecer no cadastro, ou de quando a escola usava bimestres) continua com nome.
+ */
 function nome_periodo(?int $n): string
 {
-    return $n === null ? '–' : (periodos()[$n] ?? "{$n}º período");
+    return $n === null ? '–' : (periodos()[$n] ?? rotulo_do_periodo($n));
 }
 
 /** Sugestão para o cadastro: divide o ano civil em partes iguais. */
@@ -287,7 +306,7 @@ function filtros_de_provas(): array
             'opcoes' => opcoes_sql('SELECT DISTINCT ano FROM provas WHERE ano IS NOT NULL ORDER BY ano DESC'),
         ],
         'periodo' => [
-            'rotulo' => ucfirst(PERIODO_ESCOLA),
+            'rotulo' => nome_da_divisao(),
             'condicao' => 'p.periodo = ?',
             'opcoes' => periodos(),
         ],
@@ -636,14 +655,32 @@ function conferir_formato_da_folha(array &$layout, array $leitura, array $gabari
 
 /**
  * Chama o worker Python e devolve uma entrada por página lida:
- * ['arquivo', 'pagina', 'ok', 'erro'?, 'respostas'?, 'duvidosas'?, 'imagem_debug'?, 'imagem_recorte'?,
+ * ['arquivo', 'pagina', 'ok', 'erro'?, 'respostas'?, 'duvidosas'?, 'imagem_debug'? (só a área das bolinhas, anotada),
  *  'caderno'?, 'layout'?, 'confianca'?]
  * Sem layout (ou com um layout ainda sem formato), o leitor detecta o formato de cada folha.
  */
 function ler_folhas(array $arquivos, ?array $layout = null): array
 {
+    return rodar_leitor(array_merge(['ler'], $arquivos), $layout);
+}
+
+/**
+ * Recortes enviados pelo app (a foto inteira não sai do celular). $recortes: um por folha,
+ * ['area' => caminho, 'qr' => caminho ou null, 'caderno' => texto do QR lido no app ou null].
+ * Mesma saída de ler_folhas(); 'imagem_debug' já traz o QR acima da área anotada.
+ */
+function ler_recortes(array $recortes, ?array $layout = null): array
+{
+    $cadernoValido = fn($c) => is_string($c) && preg_match('/^[A-Za-z0-9]{1,40}$/', $c) ? $c : '-';
+    return rodar_leitor(array_merge(['ler-recorte'], array_column($recortes, 'area'),
+        ['--qr'], array_map(fn($r) => $r['qr'] ?? '-', $recortes),
+        ['--caderno'], array_map(fn($r) => $cadernoValido($r['caderno'] ?? null), $recortes)), $layout);
+}
+
+function rodar_leitor(array $argumentos, ?array $layout): array
+{
     $pastaDebug = pasta_temporaria() . '/lidas';
-    $cmd = array_merge([PYTHON, OMR_CLI, 'ler'], $arquivos, ['--debug', $pastaDebug]);
+    $cmd = array_merge([PYTHON, OMR_CLI], $argumentos, ['--debug', $pastaDebug]);
     if ($layout && formato_conhecido($layout)) {
         $layoutJson = tempnam(pasta_temporaria(), 'layout');
         file_put_contents($layoutJson, json_encode(layout_do_leitor($layout), JSON_UNESCAPED_UNICODE));
@@ -959,11 +996,37 @@ function tipo_do_arquivo(string $caminho): ?string
     return TIPOS_ACEITOS[$tipo] ?? null;
 }
 
-/** Move o upload para a pasta temporária da requisição (o nome original fica legível para o Python). */
-function guardar_upload(array $arq): string
+/**
+ * Recorte enviado pelo app: a área de respostas em $campoArea e, à parte, o QR em $campoQr,
+ * com o caderno que o app leu em $_POST['caderno']. Devolve [] ou um upload com 'qr' e 'caderno'.
+ */
+function recorte_do_app(string $campoArea, string $campoQr): array
+{
+    $area = upload_normalizado($_FILES[$campoArea] ?? []);
+    if (!$area) {
+        return [];
+    }
+    $qr = upload_normalizado($_FILES[$campoQr] ?? []);
+    foreach (array_merge($area, $qr) as $a) {
+        if (!in_array($a['ext'], ['jpg', 'png'], true)) {
+            throw new ErroDoUsuario('O recorte da folha precisa ser JPG ou PNG.', 415);
+        }
+    }
+    $caderno = trim((string)($_POST['caderno'] ?? ''));
+    return [$area[0] + ['qr' => $qr[0] ?? null, 'caderno' => $caderno !== '' ? $caderno : null]];
+}
+
+/** Nome guardado no banco: nunca o nome original, que pode trazer o nome do aluno. */
+function nome_generico(string $prefixo, int $ordem, string $ext): string
+{
+    return preg_replace('/[^A-Za-z0-9_-]+/', '', $prefixo) . '_folha' . str_pad((string)$ordem, 2, '0', STR_PAD_LEFT) . ".$ext";
+}
+
+/** Move o upload para a pasta temporária da requisição, com o nome $nome (ou o original). */
+function guardar_upload(array $arq, ?string $nome = null): string
 {
     $pasta = pasta_temporaria();
-    $base = preg_replace('/[^A-Za-z0-9_.-]+/', '_', pathinfo($arq['nome'], PATHINFO_FILENAME));
+    $base = preg_replace('/[^A-Za-z0-9_.-]+/', '_', pathinfo($nome ?? $arq['nome'], PATHINFO_FILENAME));
     $destino = $pasta . '/' . bin2hex(random_bytes(4)) . '_' . $base . '.' . $arq['ext'];
     if (!move_uploaded_file($arq['tmp'], $destino)) {
         throw new RuntimeException("Não foi possível salvar \"{$arq['nome']}\".");

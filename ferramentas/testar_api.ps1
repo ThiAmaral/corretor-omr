@@ -1,10 +1,13 @@
 ﻿<#
 Teste de ponta a ponta da API com um professor de verdade (Fase 6).
 
-Faz o que o aplicativo vai fazer: login no Supabase Auth, cadastro da prova pela
-foto do gabarito, revisão (dificuldade e habilidade), aprovação, envio das 20
-fotos da turma 8A uma a uma, relatório, revisão de uma folha e os erros de
+Faz o que o aplicativo vai fazer: login no Supabase Auth, cadastro da prova pelo
+recorte do gabarito, revisão (dificuldade e habilidade), aprovação, envio das 20
+folhas da turma 8A uma a uma, relatório, revisão de uma folha e os erros de
 login. No fim mostra uma tabela com o resultado de cada passo.
+
+Como o app, envia só os recortes (área de respostas + QR), feitos antes com
+"omr_cli.py recortar"; a foto inteira enviada no lugar do recorte tem de ser recusada.
 
 Uso, com o sistema rodando (iniciar.cmd ou Docker):
   powershell -ExecutionPolicy Bypass -File ferramentas/testar_api.ps1 -Email professor@escola.br
@@ -17,7 +20,7 @@ A prova criada ("TESTE Fase 6 - API ...") fica no banco, como as provas de teste
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Email,
-    [string]$Servidor = 'http://localhost:8000',
+    [string]$Servidor = 'http://localhost:8001',
     [string]$SupabaseUrl = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -26,6 +29,18 @@ $fotos = Join-Path $raiz 'exemplos\ama\geradas_8A'
 $temp = Join-Path $env:TEMP ('teste_api_' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $temp | Out-Null
 $semBom = New-Object System.Text.UTF8Encoding $false
+
+# Recortes como o app faz (a foto inteira, com o nome do aluno, não sai do celular).
+$python = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'
+if (-not (Test-Path $python)) { $python = 'python' }
+$recortes = Join-Path $temp 'recortes'
+& $python (Join-Path $raiz 'worker\omr_cli.py') recortar $fotos --saida $recortes | Out-Null
+function Recorte([string]$Nome, [string]$CampoArea = 'folha', [string]$CampoQr = 'qr') {
+    $campos = @('-F', "$CampoArea=@$(Join-Path $recortes "$($Nome)_area.jpg")")
+    $qr = Join-Path $recortes "$($Nome)_qr.jpg"
+    if (Test-Path $qr) { $campos += @('-F', "$CampoQr=@$qr") }
+    return $campos
+}
 
 # URL do Supabase e chave para o login: a publishable (como o app), ou a secret se não houver.
 $config = @{}
@@ -95,19 +110,19 @@ try {
     Conferir 'GET /api/config' ($r.Status -eq 200 -and $r.Json.professor.email -eq $Email) "HTTP $($r.Status), professor $($r.Json.professor.email)"
     $periodo = $r.Json.periodo_atual
 
-    # ------------------------------------------- Cadastro pela foto do gabarito
+    # ------------------------------------------- Cadastro pelo recorte do gabarito
     $nome = 'TESTE Fase 6 - API ' + (Get-Date -Format 'dd/MM HH:mm')
-    $r = Api 'POST' 'provas' @('-F', "ano=$((Get-Date).Year)", '-F', "periodo=$periodo", '-F', "nome=$nome",
-        '-F', "gabarito_imagem=@$(Join-Path $fotos 'gabarito.jpg')")
+    $r = Api 'POST' 'provas' (@('-F', "ano=$((Get-Date).Year)", '-F', "periodo=$periodo", '-F', "nome=$nome") +
+        (Recorte 'gabarito' 'gabarito_imagem' 'gabarito_qr'))
     if ($r.Status -ne 201) { throw "O cadastro da prova falhou (HTTP $($r.Status)): $($r.Json.erro)" }
     $prova = $r.Json.prova
-    Conferir 'POST /api/provas (foto do gabarito)' ($r.Status -eq 201 -and $prova.status -eq 'rascunho' -and $prova.caderno -eq '2265M0801' -and @($prova.questoes).Count -eq 26) `
+    Conferir 'POST /api/provas (recorte do gabarito)' ($r.Status -eq 201 -and $prova.status -eq 'rascunho' -and $prova.caderno -eq '2265M0801' -and @($prova.questoes).Count -eq 26) `
         "HTTP $($r.Status), prova $($prova.id), caderno $($prova.caderno), $(@($prova.questoes).Count) questões"
     Conferir 'Autoria (criado_por)' ($prova.criado_por -eq $login.user.id) "$($prova.criado_por)"
     Conferir 'Leitura com coordenadas' ($null -ne $r.Json.leitura.respostas[0].bolinhas) "confiança $($r.Json.leitura.confianca.nivel)"
     $id = $prova.id
 
-    $r = Api 'POST' "provas/$id/folhas" @('-F', 'turma=8A', '-F', "folha=@$(Join-Path $fotos '8A_aluno01.jpg')")
+    $r = Api 'POST' "provas/$id/folhas" (@('-F', 'turma=8A') + (Recorte '8A_aluno01'))
     Conferir 'Folha antes de aprovar' ($r.Status -eq 409) "HTTP $($r.Status): $($r.Json.erro)"
 
     # --------------------------------------------------- Revisão e aprovação
@@ -133,7 +148,7 @@ try {
     $lidas = 0; $primeira = $null
     $relogio = [Diagnostics.Stopwatch]::StartNew()
     foreach ($foto in Get-ChildItem $fotos -Filter '8A_aluno*.jpg' | Sort-Object Name) {
-        $r = Api 'POST' "provas/$id/folhas" @('-F', 'turma=8A', '-F', "folha=@$($foto.FullName)")
+        $r = Api 'POST' "provas/$id/folhas" (@('-F', 'turma=8A') + (Recorte $foto.BaseName))
         if ($r.Status -eq 200 -and $r.Json.folhas[0].ok) {
             $lidas++
             if (-not $primeira) { $primeira = $r.Json.folhas[0] }
@@ -143,10 +158,13 @@ try {
         $contador = $r.Json.folhas_da_turma
     }
     $relogio.Stop()
-    Conferir 'POST /folhas (20 fotos)' ($lidas -eq 20 -and $contador -eq 20) ("{0} lidas, contador {1}, {2:N1} s por foto" -f $lidas, $contador, ($relogio.Elapsed.TotalSeconds / 20))
+    Conferir 'POST /folhas (20 recortes)' ($lidas -eq 20 -and $contador -eq 20) ("{0} lidas, contador {1}, {2:N1} s por foto" -f $lidas, $contador, ($relogio.Elapsed.TotalSeconds / 20))
 
     $r = Api 'POST' "provas/$id/folhas" @('-F', 'turma=8A', '-F', "folha=@$(Join-Path $raiz 'exemplos\gabarito_oficial.png')")
     Conferir 'Folha de outro modelo' ($r.Status -eq 200 -and -not $r.Json.folhas[0].ok -and $r.Json.folhas_da_turma -eq 20) "codigo $($r.Json.folhas[0].codigo)"
+
+    $r = Api 'POST' "provas/$id/folhas" @('-F', 'turma=8A', '-F', "folha=@$(Join-Path $fotos '8A_aluno01.jpg')")
+    Conferir 'Foto inteira no lugar do recorte' ($r.Status -eq 200 -and $r.Json.folhas[0].codigo -eq 'nao_recorte' -and $r.Json.folhas_da_turma -eq 20) "codigo $($r.Json.folhas[0].codigo)"
 
     # ------------------------------------------------------------- Relatório
     $r = Api 'GET' "provas/$id/relatorio?turma=8A"

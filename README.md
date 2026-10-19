@@ -14,6 +14,7 @@ web/        Backend + telas em PHP (cadastro da prova, envio, relatórios, revis
   api/      API REST em JSON para o aplicativo (controlador frontal)
   src/      Operações do sistema (servicos.php), login (auth.php) e rotas da API (api.php)
 worker/     Leitor óptico em Python/OpenCV (só lê a folha; não conhece o banco)
+mobile/     Aplicativo iOS/Android em Expo (React Native), que usa a API
 supabase/   Migrações do banco (PostgreSQL no Supabase), aplicadas com a Supabase CLI
 ferramentas/ Gerador de folhas de teste e validador de precisão
 exemplos/   Gabarito real, layouts e folhas fictícias das turmas 7A e 7B;
@@ -22,10 +23,17 @@ exemplos/   Gabarito real, layouts e folhas fictícias das turmas 7A e 7B;
 
 O andamento do plano de evolução fica em [PROGRESSO.md](PROGRESSO.md).
 
-Os dados ficam no **Supabase**: provas, questões e folhas no PostgreSQL, e as
-imagens (só a área de respostas recortada e a imagem anotada pelo leitor) no
-Supabase Storage, em buckets privados. A foto enviada não é guardada; o nome
-escrito à mão no cabeçalho nunca sai do servidor.
+Os dados ficam no **Supabase**: provas, questões e folhas no PostgreSQL, e uma
+imagem por folha no Supabase Storage, num bucket privado: só a área das
+bolinhas, anotada pelo leitor, com o QR do caderno numa faixa em cima. O nome do
+aluno não é guardado em lugar nenhum.
+
+**A foto da folha não sai do celular.** O app acha os 4 quadrados pretos,
+endireita a folha e envia só dois recortes: a área de respostas e a faixa do QR,
+que termina antes do campo do nome. A foto original fica numa pasta privada do
+app, que o professor apaga pela tela da prova. O painel web ainda recebe a foto
+ou o PDF da folha inteira (lida numa pasta temporária e apagada em seguida):
+use-o só no computador da escola.
 
 A divisão já segue a arquitetura combinada: o PHP é dono do banco e da regra
 de correção; o Python só devolve "qual bolinha foi marcada". Hoje o PHP chama o
@@ -110,18 +118,26 @@ linha de comando, sem mexer no `php.ini`. Em outros sistemas:
 
 ```bash
 pip install -r worker/requirements.txt
-php -S localhost:8000 -t web web/src/roteador.php
+php -S localhost:8001 -t web web/src/roteador.php
 ```
 
 O `web/src/roteador.php` faz o que o Apache faz no Docker: manda `/api/...`
 para a API e esconde as pastas `src/` e `testes/`.
 
+O `iniciar.cmd` aceita conexões de outros aparelhos da mesma rede, para testar o
+aplicativo no celular. Para aceitar só do próprio computador, use
+`iniciar.cmd local`.
+
 ## Ano letivo e filtros
 
-Cada prova é cadastrada com o ano letivo e o período. A divisão do ano segue a
-variável `PERIODO_ESCOLA` (`bimestre`, `trimestre` ou `semestre`; padrão
-`bimestre`), definida no `docker-compose.yml`. A lista de provas pode ser
-filtrada por ano e período. Para criar outros filtros (turma, série), acrescente
+Cada prova é cadastrada com o ano letivo e a **edição do simulado** (1ª ou
+2ª edição). A quantidade de edições vem de `EDICOES_SIMULADO` (padrão 2):
+quando houver uma 3ª edição, basta mudar para 3. Para dividir por período
+letivo em vez de edição, use `PERIODO_ESCOLA` = `bimestre`, `trimestre` ou
+`semestre` (o padrão é `edicao`). As duas ficam no `docker-compose.yml` ou no
+`.env`. O número é o mesmo campo `periodo` do banco; provas antigas com um
+número fora da lista aparecem com o nome da edição ("4ª edição"). A lista de
+provas pode ser filtrada por ano e edição. Para criar outros filtros (turma, série), acrescente
 uma entrada em `filtros_de_provas()` no `web/lib.php`; o formulário e a consulta
 se ajustam sozinhos.
 
@@ -134,7 +150,7 @@ aprovada.
 
 ### Com a folha AMA (gabarito por foto)
 
-1. Em **Nova prova**, informe o ano e o período e envie
+1. Em **Nova prova**, informe o ano e a edição e envie
    `exemplos/ama/geradas_8A/gabarito.jpg`. O sistema lê o caderno pelo QR
    (`2265M0801`), o formato (26 questões em blocos de 7, 7, 7 e 5) e as
    respostas, e sugere o nome "AMA – Matemática 8º ano (M0801)".
@@ -211,13 +227,13 @@ e a chave **publishable**) e manda o token em toda chamada:
 |---|---|---|
 | GET | `/api/config` | Períodos, disciplinas, dificuldades, limites e o professor do token |
 | GET | `/api/provas?ano=&periodo=` | Lista de provas |
-| POST | `/api/provas` | `multipart`: `ano`, `periodo`, `nome` (opcional) e a foto em `gabarito_imagem` ou as letras em `gabarito_digitado`. Devolve o rascunho e a leitura da foto, com as coordenadas das bolinhas |
+| POST | `/api/provas` | `multipart`: `ano`, `periodo`, `nome` (opcional) e o recorte do gabarito feito no app (área em `gabarito_imagem`, faixa do QR em `gabarito_qr`, caderno lido em `caderno`) ou as letras em `gabarito_digitado`. Devolve o rascunho e a leitura, com as coordenadas das bolinhas no recorte |
 | GET | `/api/provas/{id}` | Prova, questões, catálogo de disciplinas e a imagem do gabarito (URL que vale 5 min) |
 | DELETE | `/api/provas/{id}` | Descarta um rascunho |
 | PUT | `/api/provas/{id}/questoes` | JSON `{"nome": ..., "questoes": [{"numero": 3, "resposta": "B", "disciplina": "Matemática", "dificuldade": "facil", "habilidade": "D07"}]}`. Só o que mudou; `null` apaga |
 | POST | `/api/provas/{id}/aprovar` | Aprova o rascunho (aceita o mesmo JSON do PUT) |
 | GET | `/api/provas/{id}/folhas?turma=` | Folhas lidas, com nota, e as recusadas |
-| POST | `/api/provas/{id}/folhas` | `multipart`: `turma` e a foto em `folha` (ou várias em `folhas[]`). Cada página volta com nota, acertos, questões a revisar e a leitura (coordenadas das bolinhas), ou com `erro` e `codigo`. Folha recusada não é gravada |
+| POST | `/api/provas/{id}/folhas` | `multipart`: `turma` e o recorte feito no app: área em `folha`, faixa do QR em `qr` (opcional) e caderno lido em `caderno` (opcional). Volta com nota, acertos, questões a revisar e a leitura (coordenadas das bolinhas no recorte), ou com `erro` e `codigo`. Folha recusada não é gravada. A foto inteira no lugar do recorte é recusada (`nao_recorte`) |
 | GET | `/api/provas/{id}/relatorio?turma=` | Resumo por turma (disciplina e dificuldade), prioridades de revisão, habilidades com acerto baixo, estatísticas por questão e dificuldade marcada × observada |
 | GET | `/api/folhas/{id}` | Folha, gabarito, níveis de preenchimento e a imagem anotada (URL que vale 5 min) |
 | PUT | `/api/folhas/{id}` | Revisão manual: `{"respostas": {"12": "B", "13": null}}` (só as que mudaram) ou a lista completa. `MULTIPLA` = marcação dupla |
@@ -233,7 +249,7 @@ enviar folha antes de aprovar), 413 arquivo grande demais (20 MB por arquivo),
 Exemplo com `curl`, depois de obter o token:
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" -F turma=8A -F folha=@exemplos/ama/geradas_8A/8A_aluno01.jpg http://localhost:8000/api/provas/4/folhas
+curl -H "Authorization: Bearer $TOKEN" -F turma=8A -F folha=@exemplos/ama/geradas_8A/8A_aluno01.jpg http://localhost:8001/api/provas/4/folhas
 ```
 
 Para testar o fluxo todo com um professor de verdade (login no Supabase,
@@ -246,6 +262,21 @@ powershell -ExecutionPolicy Bypass -File ferramentas/testar_api.ps1 -Email profe
 
 O script pede a senha sem mostrá-la. A mesma sequência está na coleção do
 Postman em [docs/api.postman.json](docs/api.postman.json).
+
+## Aplicativo (Fase 7)
+
+O app fica em [mobile/](mobile/README.md): login, lista de provas, cadastro do
+gabarito por foto ou digitado, revisão com as marcações sobre a foto,
+aprovação, escaneamento da turma com a nota na hora e o resultado da turma.
+Ele usa só a URL e a chave publishable do Supabase (para o login) e o endereço
+da API, no `mobile/.env`. Como rodar no celular está no
+[README do app](mobile/README.md); o roteiro de teste manual, em
+[docs/roteiro_teste_app.md](docs/roteiro_teste_app.md).
+
+Para abrir o app no navegador durante o desenvolvimento (`npx expo start --web`),
+libere a origem dele na API com `CORS_ORIGENS=http://localhost:8081` no `.env`.
+Sem essa variável, a API não manda cabeçalhos CORS (o app no celular não precisa
+deles).
 
 ## Testar só o leitor (sem PHP)
 
@@ -374,9 +405,13 @@ Se não foi lida (`ok: false`), vêm `erro` (a mensagem para o professor) e
 - Fora do computador local, o servidor precisa de **HTTPS**: o iOS só aceita
   conexões seguras, e a senha e o token passam por elas. A hospedagem ainda
   não foi escolhida.
-- Pelo painel web, o nome do arquivo enviado fica guardado. Se a escola
-  digitalizar as folhas com o nome do aluno no arquivo, ele aparece na lista de
-  folhas; o app manda nomes genéricos.
+- O nome do arquivo enviado nunca é guardado: no banco fica `turma_folhaNN`.
+- O painel web recebe a folha inteira (foto ou PDF), com o nome do aluno, e a
+  apaga logo depois da leitura. Fora do computador da escola, use só o app,
+  que envia apenas os recortes.
+- O número impresso abaixo da grade (ex.: `6357256532`) vai no recorte da área
+  enviado pelo app, mas não fica na imagem guardada. O significado dele, como o
+  do QR, ainda é pergunta em aberto.
 - Cada questão tem uma disciplina só (tabela `questoes`).
 - A letra `L` do caderno como Língua Portuguesa ainda não foi confirmada; por
   enquanto é só uma sugestão, que o professor confere na revisão.

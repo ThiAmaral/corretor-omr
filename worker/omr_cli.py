@@ -2,8 +2,10 @@
 Linha de comando do leitor óptico.
 
   detectar  Descobre o formato da folha (caderno, blocos, alternativas) e imprime JSON.
-  ler       Lê folhas (PNG/JPG/PDF) e imprime JSON. É o que o backend PHP chama.
-            Sem --layout, cada folha tem o formato detectado sozinho.
+  ler       Lê folhas (PNG/JPG/PDF) e imprime JSON. É o que o backend PHP chama
+            para o painel web. Sem --layout, cada folha tem o formato detectado sozinho.
+  ler-recorte  Lê os recortes enviados pelo app (área de respostas + QR), em JSON.
+  recortar  Simula o app: recorta a área e o QR de cada foto (para testes).
   corrigir  Teste rápido sem o PHP: lê gabarito + provas e imprime a taxa de acerto.
             Sem --layout, usa o formato (e o caderno) detectado no gabarito.
 
@@ -50,6 +52,37 @@ def recortar_bolinhas(img, grade):
     return img[y0:y1, x0:x1]
 
 
+def guardar_anotada(res, layout, pasta_debug, base, qr=None):
+    """Grava a área anotada (só as bolinhas; com o recorte do QR em cima, se houver)."""
+    os.makedirs(pasta_debug, exist_ok=True)
+    # JPEG: cerca de 70 KB, contra 600 KB em PNG (cabe no Storage gratuito).
+    destino = os.path.join(pasta_debug, f"{base}.jpg")
+    anotada = recortar_bolinhas(omr.desenhar_depuracao(res, layout), res["_grade"])
+    cv2.imwrite(destino, omr.compor_com_qr(anotada, qr), [cv2.IMWRITE_JPEG_QUALITY, 80])
+    return destino
+
+
+def ler_recortes(areas, qrs, cadernos, layout, pasta_debug=None):
+    """Recortes enviados pelo app: área de respostas + QR ("-" quando não houver)."""
+    saida = []
+    for area_arq, qr_arq, caderno in zip(areas, qrs, cadernos):
+        item = {"arquivo": area_arq, "pagina": 1}
+        try:
+            area = cv2.imread(area_arq)
+            qr = cv2.imread(qr_arq) if qr_arq != "-" else None
+            if area is None:
+                raise omr.ErroLeitura("Não consegui abrir o recorte enviado.", "arquivo")
+            res = omr.ler_recorte(area, qr, layout, caderno if caderno != "-" else None)
+            item.update(ok=True, **omr.resultado_publico(res))
+            if pasta_debug:
+                base = os.path.splitext(os.path.basename(area_arq))[0]
+                item["imagem_debug"] = guardar_anotada(res, layout, pasta_debug, base, qr)
+        except omr.ErroLeitura as e:
+            item.update(ok=False, erro=str(e), codigo=e.codigo)
+        saida.append(item)
+    return saida
+
+
 def ler_arquivos(arquivos, layout, pasta_debug=None):
     saida = []
     for arq in arquivos:
@@ -64,18 +97,9 @@ def ler_arquivos(arquivos, layout, pasta_debug=None):
                 res = omr.ler_folha(img, layout)
                 item.update(ok=True, **omr.resultado_publico(res))
                 if pasta_debug:
-                    os.makedirs(pasta_debug, exist_ok=True)
+                    # Só a área das bolinhas, sem o cabeçalho com o nome do aluno (LGPD).
                     base = os.path.splitext(os.path.basename(arq))[0]
-                    # JPEG: cerca de 70 KB, contra 600 KB em PNG (cabe no Storage gratuito).
-                    destino = os.path.join(pasta_debug, f"{base}_p{n}.jpg")
-                    anotada = recortar_bolinhas(omr.desenhar_depuracao(res, layout), res["_grade"])
-                    cv2.imwrite(destino, anotada, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                    item["imagem_debug"] = destino
-                    # Só a área de respostas, sem o cabeçalho com o nome do aluno (LGPD).
-                    recorte = os.path.join(pasta_debug, f"{base}_p{n}_area.jpg")
-                    cv2.imwrite(recorte, recortar_bolinhas(res["_folha"], res["_grade"]),
-                                [cv2.IMWRITE_JPEG_QUALITY, 85])
-                    item["imagem_recorte"] = recorte
+                    item["imagem_debug"] = guardar_anotada(res, layout, pasta_debug, f"{base}_p{n}")
             except omr.ErroLeitura as e:
                 item.update(ok=False, erro=str(e), codigo=e.codigo)
             saida.append(item)
@@ -122,6 +146,32 @@ def cmd_detectar(a):
 def cmd_ler(a):
     _, layout = carregar_layout(a.layout)
     json.dump(ler_arquivos(expandir(a.arquivos), layout, a.debug), sys.stdout, ensure_ascii=False)
+
+
+def cmd_ler_recorte(a):
+    _, layout = carregar_layout(a.layout)
+    n = len(a.areas)
+    qrs = a.qr or ["-"] * n
+    cadernos = a.caderno or ["-"] * n
+    if len(qrs) != n or len(cadernos) != n:
+        sys.exit("Informe um --qr e um --caderno para cada área (use - quando não houver).")
+    json.dump(ler_recortes(a.areas, qrs, cadernos, layout, a.debug), sys.stdout, ensure_ascii=False)
+
+
+def cmd_recortar(a):
+    """Simula o app: grava <nome>_area.jpg e <nome>_qr.jpg de cada foto."""
+    os.makedirs(a.saida, exist_ok=True)
+    for arq in expandir(a.arquivos):
+        base = os.path.splitext(os.path.basename(arq))[0]
+        try:
+            area, qr, caderno = omr.recortar_para_envio(omr.carregar_paginas(arq)[0])
+        except omr.ErroLeitura as e:
+            print(f"{base}: {e}")
+            continue
+        cv2.imwrite(os.path.join(a.saida, f"{base}_area.jpg"), area, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        if qr is not None:
+            cv2.imwrite(os.path.join(a.saida, f"{base}_qr.jpg"), qr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        print(f"{base}: área {area.shape[1]}x{area.shape[0]}, QR {'sim' if qr is not None else 'não'}, caderno {caderno or '-'}")
 
 
 def cmd_corrigir(a):
@@ -192,6 +242,19 @@ def main():
     pl.add_argument("--layout", help="layout da prova; sem ele, o formato é detectado")
     pl.add_argument("--debug", help="pasta para salvar imagens anotadas")
     pl.set_defaults(func=cmd_ler)
+
+    pr = sub.add_parser("ler-recorte", help="recortes enviados pelo app (área de respostas + QR)")
+    pr.add_argument("areas", nargs="+")
+    pr.add_argument("--qr", nargs="+", help="um por área, na mesma ordem; - quando não houver")
+    pr.add_argument("--caderno", nargs="+", help="caderno lido pelo app, um por área; - quando não houver")
+    pr.add_argument("--layout")
+    pr.add_argument("--debug")
+    pr.set_defaults(func=cmd_ler_recorte)
+
+    pt = sub.add_parser("recortar", help="simula o app: recorta área e QR de cada foto")
+    pt.add_argument("arquivos", nargs="+")
+    pt.add_argument("--saida", required=True)
+    pt.set_defaults(func=cmd_recortar)
 
     pc = sub.add_parser("corrigir")
     pc.add_argument("--gabarito", required=True)

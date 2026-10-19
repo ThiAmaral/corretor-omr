@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 /*
  * Roteador do servidor embutido do PHP (php -S), usado sem Docker (iniciar.cmd):
- *   php -S localhost:8000 -t web web/src/roteador.php
+ *   php -S localhost:8001 -t web web/src/roteador.php
  * Faz o que o Apache faz no Docker: /api/... vai para api/index.php, e as pastas
  * src/ e testes/ não podem ser abertas pelo navegador.
  */

@@ -689,16 +689,23 @@ def ler_folha(imagem_bgr: np.ndarray, layout: Layout | None = None) -> dict:
     Antes, mede a qualidade da foto. Foto escura ou pequena demais é recusada
     logo: ela chega a ser lida, mas com respostas erradas. Desfocada só muda a
     mensagem quando a leitura falha, e baixa a confiança quando dá certo."""
-    cinza = cv2.cvtColor(imagem_bgr, cv2.COLOR_BGR2GRAY) if imagem_bgr.ndim == 3 else imagem_bgr
+    cinza = _cinza(imagem_bgr)
     normal = normalizar_iluminacao(cinza)
-    marcadores = localizar_marcadores(normal)
+    return _ler_com_qualidade(cinza, normal, localizar_marcadores(normal), layout)
+
+
+def _cinza(imagem: np.ndarray) -> np.ndarray:
+    return cv2.cvtColor(imagem, cv2.COLOR_BGR2GRAY) if imagem.ndim == 3 else imagem
+
+
+def _ler_com_qualidade(cinza, normal, marcadores, layout, qr_do_app=None) -> dict:
     qualidade = avaliar_qualidade(cinza, marcadores)
     problema = qualidade["problema"]
     if problema == "escura" or (marcadores and qualidade["lado_marcador"] < LADO_MINIMO):
         raise ErroLeitura(MENSAGENS[problema], problema)
 
     try:
-        resultado = _ler_folha(cinza, normal, marcadores, layout)
+        resultado = _ler_folha(cinza, normal, marcadores, layout, qr_do_app)
     except ErroLeitura as e:
         if problema and e.codigo in ("grade", "sem_marcadores", "formato_diferente"):
             raise ErroLeitura(MENSAGENS[problema], problema) from e
@@ -730,15 +737,22 @@ def adicionar_posicoes(resultado: dict, forma: tuple[int, int]) -> None:
     resultado["raio_bolinha"] = round(float(np.median(raios)) / w, 4) if raios else None
 
 
-def _ler_folha(cinza: np.ndarray, normal: np.ndarray, marcadores, layout: Layout | None) -> dict:
+def _ler_folha(cinza: np.ndarray, normal: np.ndarray, marcadores, layout: Layout | None,
+               qr_do_app: tuple[str | None] | None = None) -> dict:
+    """qr_do_app: recorte enviado pelo app, já com o lado de cima em cima; traz o
+    caderno lido no recorte do QR (ou None). Não há QR nem moldura para procurar."""
     caderno, giro, girada, canto_estimado = None, 0, False, False
     if marcadores:
         cantos, lado, canto_estimado = marcadores
-        caderno, giro = ler_qr_acima(cinza, cantos)
-    if not caderno:
-        caderno, pontos_qr = ler_qr(cinza)
-        if caderno and marcadores:
-            giro = _giro_pelo_qr(cantos, pontos_qr)
+    if qr_do_app is not None:
+        caderno = qr_do_app[0]
+    else:
+        if marcadores:
+            caderno, giro = ler_qr_acima(cinza, cantos)
+        if not caderno:
+            caderno, pontos_qr = ler_qr(cinza)
+            if caderno and marcadores:
+                giro = _giro_pelo_qr(cantos, pontos_qr)
     giro = giro or 0
     if layout and layout.caderno and caderno and caderno != layout.caderno:
         raise ErroLeitura(f"Esta folha é do caderno {caderno}, e a prova é do caderno {layout.caderno}.",
@@ -763,9 +777,12 @@ def _ler_folha(cinza: np.ndarray, normal: np.ndarray, marcadores, layout: Layout
                 conferir_layout(detectado, layout)
             alinhada = True
         except ErroLeitura:
-            if caderno:  # folha AMA de verdade: o erro vale
+            if caderno or qr_do_app is not None:  # folha AMA de verdade: o erro vale
                 raise
             # 4 "marcadores" que não eram marcadores: tenta a moldura
+    if not alinhada and qr_do_app is not None:
+        raise ErroLeitura("O recorte não tem os 4 quadrados pretos dos cantos da área de respostas. "
+                          "Tire outra foto, com a folha inteira na tela.", "sem_marcadores")
     if not alinhada:
         folha, moldura, matriz = localizar_folha(cinza)
         try:
@@ -842,6 +859,165 @@ def _ler_folha(cinza: np.ndarray, normal: np.ndarray, marcadores, layout: Layout
         "_grade": grade,
         "_matriz": matriz,
     }
+
+
+# ---------------------------------------------------------------------------
+# Recorte feito no celular (a foto inteira não sai do aparelho)
+# ---------------------------------------------------------------------------
+# O app acha os 4 marcadores e o QR, gira a foto para o lado de cima ficar em
+# cima e envia só dois recortes: a área entre os marcadores e o QR com o código
+# impresso. O nome e a turma do aluno ficam entre os dois e não são enviados.
+# recortar_para_envio() faz em Python o mesmo que mobile/src/lib/recorte.ts,
+# para os testes e para conferir o app com as mesmas fotos.
+
+MARGEM_RECORTE = 1.2  # folga em volta dos centros dos marcadores, em lados de marcador
+MARGEM_ESTIMADO = 2.5  # com um canto estimado, que pode errar alguns pixels
+AREA_MINIMA_RECORTE = 0.45  # os marcadores ocupam quase todo o recorte; a foto inteira, não
+QR_MAXIMO_RECORTE = 0.25  # o recorte do QR é pequeno perto da área de respostas
+
+
+def lado_de_cima(cantos: np.ndarray, para_cima: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Lado do quadrilátero (tl, tr, br, bl na foto) cuja normal para fora fica
+    mais perto de `para_cima` (vetor na foto). Devolve (ponta esquerda, ponta
+    direita) desse lado, vistas com a folha em pé."""
+    melhor, nota = 0, -2.0
+    for i in range(4):
+        d = cantos[(i + 1) % 4] - cantos[i]
+        normal = np.array([d[1], -d[0]]) / (np.linalg.norm(d) + 1e-9)
+        n = float(np.dot(normal, para_cima))
+        if n > nota:
+            melhor, nota = i, n
+    return cantos[melhor], cantos[(melhor + 1) % 4]
+
+
+def _girar(imagem: np.ndarray, graus: float) -> tuple[np.ndarray, np.ndarray]:
+    """Gira no sentido anti-horário (como se vê na tela), aumentando a tela para
+    não cortar nada, como o expo-image-manipulator. Devolve (imagem, matriz 2x3)."""
+    h, w = imagem.shape[:2]
+    M = cv2.getRotationMatrix2D((w / 2, h / 2), graus, 1.0)
+    cos, sen = abs(M[0, 0]), abs(M[0, 1])
+    nw, nh = int(round(h * sen + w * cos)), int(round(h * cos + w * sen))
+    M[0, 2] += nw / 2 - w / 2
+    M[1, 2] += nh / 2 - h / 2
+    borda = (255, 255, 255) if imagem.ndim == 3 else 255
+    return cv2.warpAffine(imagem, M, (nw, nh), flags=cv2.INTER_LINEAR, borderValue=borda), M
+
+
+def _caixa(pts: np.ndarray, esq: float, cima: float, dir_: float, baixo: float, forma) -> tuple[int, int, int, int]:
+    h, w = forma[:2]
+    x0 = max(int(pts[:, 0].min() - esq), 0)
+    y0 = max(int(pts[:, 1].min() - cima), 0)
+    x1 = min(int(math.ceil(pts[:, 0].max() + dir_)), w)
+    y1 = min(int(math.ceil(pts[:, 1].max() + baixo)), h)
+    return x0, y0, x1, y1
+
+
+# Faixa onde fica o QR na folha AMA, em larguras da área (distância entre os
+# marcadores de cima), a partir do marcador de cima à esquerda. Na folha, o QR
+# vai de -0,47 a -0,38 e o código impresso termina em -0,36; o rótulo "Nome
+# do(a) estudante" começa em -0,30. A faixa é o recorte do QR enviado pelo app.
+FAIXA_QR = {"esq": -0.05, "dir": 0.25, "cima": -0.56, "baixo": -0.33}
+
+
+def _mover(pts, M) -> np.ndarray:
+    return cv2.transform(np.asarray(pts, dtype="float64").reshape(-1, 1, 2), M).reshape(-1, 2)
+
+
+def _faixa_do_qr(cantos_girados: np.ndarray, forma) -> tuple[int, int, int, int]:
+    """Caixa (x0, y0, x1, y1) da faixa do QR na foto já em pé."""
+    c = cantos_girados[np.argsort(cantos_girados[:, 1])]
+    topo = c[:2][np.argsort(c[:2, 0])]  # os dois de cima, da esquerda para a direita
+    L = float(np.linalg.norm(topo[1] - topo[0]))
+    h, w = forma[:2]
+    y = float(topo[:, 1].min())
+    return (max(int(topo[0, 0] + FAIXA_QR["esq"] * L), 0), max(int(y + FAIXA_QR["cima"] * L), 0),
+            min(int(topo[0, 0] + FAIXA_QR["dir"] * L), w), max(int(y + FAIXA_QR["baixo"] * L), 0))
+
+
+def recortar_para_envio(imagem_bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray | None, str | None]:
+    """O que o app faz antes de enviar: (área de respostas, QR ou None, caderno ou None).
+    1. Acha os marcadores. 2. Gira a foto para um lado comprido da área ficar em
+    cima e nivelado, primeiro o mais perto do alto da foto. 3. Procura o QR só na
+    faixa onde ele fica; achou, o lado de cima é esse e a faixa é o recorte do QR.
+    Senão, tenta de cabeça para baixo. 4. Sem QR, vale o lado mais perto do alto."""
+    cinza = _cinza(imagem_bgr)
+    marcadores = localizar_marcadores(normalizar_iluminacao(cinza))
+    if not marcadores:
+        raise ErroLeitura("Não encontrei os 4 quadrados pretos dos cantos da área de respostas.", "sem_marcadores")
+    cantos, lado, estimado = marcadores
+    # O lado comprido cuja normal para fora aponta mais para o alto da foto.
+    lados = sorted(range(4), key=lambda i: -np.linalg.norm(cantos[(i + 1) % 4] - cantos[i]))[:2]
+    normais = [np.array([d[1], -d[0]]) for d in (cantos[(i + 1) % 4] - cantos[i] for i in lados)]
+    para_cima = min(normais, key=lambda n: n[1] / (np.linalg.norm(n) + 1e-9))
+    esq, dir_ = lado_de_cima(cantos, para_cima)
+    girada, M = _girar(imagem_bgr, math.degrees(math.atan2(dir_[1] - esq[1], dir_[0] - esq[0])))
+    c = _mover(cantos, M)
+
+    caderno, qr = None, None
+    for tentativa in (0, 1):
+        if tentativa:  # de cabeça para baixo
+            girada = cv2.rotate(girada, cv2.ROTATE_180)
+            h, w = girada.shape[:2]
+            c = np.array([w, h]) - c
+        x0, y0, x1, y1 = _faixa_do_qr(c, girada.shape)
+        if x1 - x0 < 10 or y1 - y0 < 10:
+            continue
+        faixa = girada[y0:y1, x0:x1]
+        caderno = ler_qr_recortado(faixa)
+        if caderno:
+            qr = faixa
+            break
+    if not caderno:  # volta para o lado mais perto do alto da foto
+        girada = cv2.rotate(girada, cv2.ROTATE_180)
+        h, w = girada.shape[:2]
+        c = np.array([w, h]) - c
+
+    m = (MARGEM_ESTIMADO if estimado else MARGEM_RECORTE) * lado
+    x0, y0, x1, y1 = _caixa(c, m, m, m, m, girada.shape)
+    return girada[y0:y1, x0:x1], qr, caderno
+
+
+def ler_qr_recortado(qr: np.ndarray) -> str | None:
+    """Lê o recorte do QR enviado pelo app, com ampliação e nitidez se precisar."""
+    cinza = _cinza(qr)
+    for reforco in (0, 1.5, 3):
+        img = cinza if not reforco else cv2.addWeighted(cinza, 1 + reforco, cv2.GaussianBlur(cinza, (0, 0), 2), -reforco, 0)
+        texto, _ = _decodificar_qr(img, (1.0, 2.0, 3.0))
+        if texto:
+            return texto
+    return None
+
+
+def ler_recorte(area_bgr: np.ndarray, qr_bgr: np.ndarray | None = None, layout: Layout | None = None,
+                caderno_do_app: str | None = None) -> dict:
+    """Lê o recorte enviado pelo app. O lado de cima já vem em cima. O caderno é o
+    do recorte do QR; se ele não for lido aqui, vale o que o app leu na foto."""
+    cinza = _cinza(area_bgr)
+    normal = normalizar_iluminacao(cinza)
+    marcadores = localizar_marcadores(normal)
+    # Defesa: a foto inteira (com o nome do aluno) não é aceita no lugar do recorte.
+    if marcadores and cv2.contourArea(marcadores[0]) < AREA_MINIMA_RECORTE * cinza.size:
+        raise ErroLeitura("A imagem enviada não é o recorte da área de respostas. Atualize o aplicativo.",
+                          "nao_recorte")
+    if qr_bgr is not None and qr_bgr.shape[0] * qr_bgr.shape[1] > QR_MAXIMO_RECORTE * cinza.size:
+        raise ErroLeitura("O recorte do QR code é grande demais. Atualize o aplicativo.", "nao_recorte")
+    caderno = (ler_qr_recortado(qr_bgr) if qr_bgr is not None and qr_bgr.size else None) or caderno_do_app
+    return _ler_com_qualidade(cinza, normal, marcadores, layout, (caderno,))
+
+
+def compor_com_qr(anotada: np.ndarray, qr: np.ndarray | None, altura_qr: int = 150) -> np.ndarray:
+    """Imagem guardada: o QR (com o código impresso) numa faixa acima da área anotada."""
+    if qr is None or not qr.size:
+        return anotada
+    qr = cv2.cvtColor(qr, cv2.COLOR_GRAY2BGR) if qr.ndim == 2 else qr
+    esc = altura_qr / qr.shape[0]
+    qr = cv2.resize(qr, (max(int(qr.shape[1] * esc), 1), altura_qr), interpolation=cv2.INTER_AREA)
+    folga = 10
+    largura = max(anotada.shape[1], qr.shape[1] + 2 * folga)
+    saida = np.full((altura_qr + 2 * folga + anotada.shape[0], largura, 3), 255, np.uint8)
+    saida[folga:folga + altura_qr, folga:folga + qr.shape[1]] = qr
+    saida[altura_qr + 2 * folga:, :anotada.shape[1]] = anotada
+    return saida
 
 
 def desenhar_depuracao(resultado: dict, layout: Layout | None = None) -> np.ndarray:

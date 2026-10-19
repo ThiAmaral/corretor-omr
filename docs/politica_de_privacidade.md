@@ -35,16 +35,19 @@ têm conta.
 
 ### Das folhas de resposta dos alunos
 
-O sistema **não guarda o nome do aluno** nem a foto inteira da folha.
+O sistema **não guarda o nome do aluno** nem a foto inteira da folha. No
+aplicativo, a foto **não sai do celular**: ele recorta a área de respostas e o
+QR code do caderno e envia só esses recortes.
 
 | Dado | Para quê |
 |---|---|
-| Foto da folha | Só para a leitura. Fica numa pasta temporária do servidor e é apagada assim que a leitura termina (em segundos) |
-| Recorte da área de respostas | A grade de bolinhas, sem o cabeçalho com o nome do aluno. Permite ao professor conferir uma leitura duvidosa |
-| Imagem anotada | O mesmo recorte, com as marcações que o sistema leu |
+| Foto da folha (aplicativo) | Fica só no celular do professor, numa pasta privada do aplicativo (fora da galeria). O professor apaga pela tela da prova |
+| Recortes enviados pelo aplicativo | A área de respostas (bolinhas e os 4 quadrados dos cantos) e o QR code do caderno, sem o cabeçalho com o nome do aluno. Ficam numa pasta temporária do servidor e são apagados assim que a leitura termina (em segundos) |
+| Foto ou PDF da folha (painel web, só no computador da escola) | Só para a leitura. Fica numa pasta temporária do servidor e é apagada assim que a leitura termina |
+| Imagem anotada | A grade de bolinhas com as marcações que o sistema leu e, em cima, o QR do caderno. Permite ao professor conferir uma leitura duvidosa |
 | Respostas marcadas, acertos e nota | Correção e relatórios da turma |
 | Turma | Separar os relatórios por turma |
-| Nome do arquivo enviado e número da página | Localizar a folha na lista. O aplicativo envia nomes genéricos; pelo painel web, o professor deve evitar arquivos com o nome do aluno |
+| Nome genérico da folha (ex.: `8A_folha03.jpg`) e número da página | Localizar a folha na lista. O nome original do arquivo não é guardado |
 
 Como as folhas não têm o nome do aluno, os relatórios mostram resultados da
 turma e das questões, não de alunos identificados.

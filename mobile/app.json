@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "Corretor AMA",
+    "slug": "corretor-ama",
+    "version": "1.0.0",
+    "scheme": "corretor",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "br.ufes.corretorama"
+    },
+    "android": {
+      "package": "br.ufes.corretorama",
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Para fotografar o gabarito oficial e as folhas de resposta dos alunos.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Para escolher uma foto já tirada do gabarito ou de uma folha.",
+          "cameraPermission": "Para fotografar o gabarito oficial e as folhas de resposta dos alunos.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "react-native-document-scanner-plugin",
+        {
+          "cameraPermission": "Para fotografar o gabarito oficial e as folhas de resposta dos alunos."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

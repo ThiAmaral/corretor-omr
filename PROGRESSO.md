@@ -17,7 +17,7 @@ Legenda: ✅ feito · 🔄 em andamento · ⏳ pendente · ⚠️ bloqueado / de
 | 4. Relatórios por dificuldade | ✅ | Testada no projeto real com as provas de teste (2026-10-12) |
 | 5. Fotos de celular | ✅ (com fotos simuladas) | Falta calibrar com fotos reais (depende da Fase 0) |
 | 6. API e login | ✅ | Testada com o login real do Supabase (2026-10-12). HTTPS depende da hospedagem |
-| 7. App | ⏳ | |
+| 7. App | 🔄 | Telas prontas e testadas no navegador (2026-10-12). Recorte no celular: a foto inteira não sai do aparelho (2026-10-18). Faltam o teste em aparelho e o build com o scanner |
 | 8. Piloto | ⏳ | |
 
 ---
@@ -698,3 +698,234 @@ dupla; quando o script conferiu o relatório, antes da revisão, era 63,1%.
   login real e o fluxo passou inteiro (prova 10). **Fase concluída.** Ficam:
   HTTPS (hospedagem), dados da escola na política de privacidade, diagramas no
   Visual Paradigm e conferir no painel se o cadastro público está desligado.
+
+---
+
+## Fase 7: aplicativo mobile (Expo / React Native)
+
+Início: 2026-10-12.
+
+Objetivo: o professor faz tudo pelo celular: login, lista de provas, cadastro
+do gabarito (foto ou digitado), revisão, aprovação, escaneamento da turma e
+resultado. O app fica em `mobile/` e consome a API da Fase 6.
+
+### Itens
+
+| # | Item | Situação | Observação |
+|---|---|---|---|
+| 7.1 | Projeto Expo (TypeScript, expo-router) em `mobile/` | ✅ | Expo SDK 57, React Native 0.86, rotas em `mobile/src/app/`. `tsc`, `expo lint` e `expo-doctor` (21/21) sem erros |
+| 7.2 | Login com Supabase Auth (URL + chave publishable) | ✅ (Auth simulado) | `supabase-js` só para o login; sessão guardada no aparelho (`expo-sqlite/localStorage`), renovada com o app aberto. Login real: no teste em aparelho (7.14) |
+| 7.3 | Cliente da API PHP (token, erros, envio de fotos) | ✅ | `mobile/src/lib/api.ts`. Token Bearer em toda chamada; 401 renova a sessão uma vez e, se continuar, volta ao login; `{"erro"}` vira a mensagem da tela; sem rede, "Sem conexão com o servidor" |
+| 7.4 | Tela "Minhas provas" com filtros de ano e período | ✅ | Recarrega ao voltar para a tela e ao puxar para baixo. Rascunho abre direto a revisão |
+| 7.5 | Nova prova: fotografar o gabarito ou digitar as respostas | ✅ | Câmera, galeria ou letras (o campo ignora espaços e números e conta as questões). O nome sugerido pelo caderno vem do servidor |
+| 7.6 | Revisão do gabarito: marcações sobre a foto, cartão por questão, intervalos de disciplina | ✅ | Círculos sobre a própria foto (coordenadas do leitor em fração da foto); faixa da questão escolhida ou foto inteira. Cartão: resposta, dificuldade, disciplina e habilidade. "Marcar várias questões": intervalo + disciplina e/ou dificuldade. Pendências da revisão no topo |
+| 7.7 | Aprovar o gabarito | ✅ | Erros do servidor (422) aparecem no rodapé, um por linha. Descartar rascunho com confirmação |
+| 7.8 | Escanear turma: câmera aberta, nota na hora, aviso de outro caderno, confirmar/corrigir, contador | ✅ (navegador) | A câmera lê o QR ao vivo e avisa antes da foto se o caderno for outro; o servidor também recusa. Confirmar ou corrigir as duvidosas ("Ver todas" para as 26). O contador vem do servidor (`folhas_da_turma`). Câmera ao vivo e QR: no aparelho (7.14) |
+| 7.9 | Resultado da turma: geral, disciplina, dificuldade e prioridades | ✅ | Mesmos números do painel e da API (ver o teste). Lista das folhas da turma; cada uma abre a correção manual |
+| 7.10 | Foto reduzida para ~1600 px antes do envio | ✅ | Lado menor em 1600 px, JPEG 85% (`mobile/src/lib/foto.ts`). Gabarito de teste: 1771×2370 → 1600×2141 |
+| 7.11 | Moldura-guia na câmera (4 quadrados pretos) | ✅ (código) | Moldura tracejada com os 4 cantos; fica vermelha quando o QR é de outro caderno. Conferir o enquadramento no aparelho |
+| 7.12 | Scanner de documento (ML Kit / VisionKit) no development build | 🔄 | `react-native-document-scanner-plugin` com o plugin do Expo. Só existe no development build: o app detecta o módulo e mostra o botão "Scanner". Falta gerar o build e testar |
+| 7.13 | Roteiro de teste manual `docs/roteiro_teste_app.md` | ✅ | 24 passos, com tabela para Android e iPhone |
+| 7.14 | Teste num Android e num iPhone de verdade | 🔄 | Android com Expo Go (2026-10-12): login real ok; dois erros achados e corrigidos (envio da foto e moldura). Falta repetir o roteiro inteiro e o iPhone |
+| 7.15 | **Recorte no celular**: a foto inteira não sai do aparelho | ✅ (navegador) | Pedido do Thiago (2026-10-18). O app acha os 4 marcadores (`mobile/src/lib/marcadores.ts`, mesmas regras do leitor), nivela a folha, procura o QR só na faixa acima da área e envia **só dois recortes**: a área entre os marcadores e a faixa do QR (que termina antes do campo do nome). Folha sem os 4 marcadores é recusada no celular, sem enviar nada. Ver "Recorte no celular" abaixo |
+| 7.16 | Servidor lê o recorte e guarda uma imagem só | ✅ | `omr.ler_recorte()` e `omr_cli.py ler-recorte`. A API (`folha` + `qr` + `caderno`; no cadastro, `gabarito_imagem` + `gabarito_qr`) recusa a foto inteira no lugar do recorte (`nao_recorte`). No Storage fica só a área das bolinhas anotada, com o QR numa faixa em cima; o bucket `folhas` deixou de ser usado e os 150 recortes de teste que havia nele foram apagados |
+| 7.17 | Nome do arquivo sempre genérico (também no painel web) | ✅ | `turma_folhaNN.ext` (gabarito: `gabarito_folha01`). Antes, o painel guardava o nome original, que podia ter o nome do aluno |
+| 7.18 | Foto original guardada só no celular, com botão para apagar | ✅ (código) | Pasta privada do app (`Paths.document/fotos/prova_<id>`), fora da galeria e do backup de fotos. A tela da prova mostra quantas há e apaga todas; descartar o rascunho apaga também. No navegador não guarda. Conferir no aparelho (7.14) |
+
+### Teste no navegador (2026-10-12)
+
+O app foi aberto na versão web (`expo start --web`, 375×812 px, como um
+celular), com o **Auth simulado** da Fase 6 (agora com CORS) devolvendo o id
+real do Thiago, a API numa porta de teste (8020, com `CORS_ORIGENS`) e o banco
+e o Storage reais. Sem câmera no navegador, as fotos entraram pela galeria
+(as mesmas imagens geradas das Fases 1 e 6).
+
+| Cenário | Resultado |
+|---|---|
+| Login com senha errada / certa | "E-mail ou senha incorretos." / lista de provas |
+| Lista e filtros | 6 provas de 2026; "1º bimestre" filtra; as pré-verificações CORS respondem 204 |
+| Nova prova pela foto (`gabarito.jpg`) | Prova 11 "TESTE Fase 7 - app web": caderno 2265M0801, 26 questões em 4 blocos, AMA – Matemática. **6,8 s** do toque até a revisão (redução + envio + leitura) |
+| Marcações sobre a foto | 26 círculos, cada um sobre a bolinha marcada (conferido na captura de tela) |
+| Marcar várias questões | 1–9 Fácil, 10–18 Médio, 19–26 Difícil; as pendências viram "Tudo preenchido" |
+| Aprovar | Prova ativa; abre a tela da prova |
+| Escanear turma `9Z-APP`: `8A_aluno01.jpg` | 19/26 (73,1%), questão 25 a conferir (a esperada é um D fraco). **4,0 s** por folha |
+| Correção na hora (25 → D) e "Salvar e próxima" | `PUT /api/folhas/151` 200; contador em 1 |
+| `8A_aluno02.jpg` | 6/26 (23,1%), conferir 12, 13 e 18: **igual à Fase 6**; contador em 2 |
+| Folha do modelo antigo | "A folha não foi lida: a foto tem pouca resolução..."; não gravada; o contador continua em 2 |
+| Resultado da `9Z-APP` | 48,1% (25 de 52) |
+| Resultado da prova 10, turma 8A | **62,9%**; Fácil 63,9%, Médio 60,6%, Difícil 64,4%; prioridades 17, 11, 9, 12, 13, 26, 21, 25: **iguais às Fases 4 e 6** |
+| Folha: correção manual | Questão 12 → D, salva; "já foi revisada"; imagem anotada na proporção certa |
+| Gabarito digitado `ab cd-ab9cd` | 8 questões; aprovar sem disciplina mostra "Falta a disciplina das questões 1 a 8." (422 do servidor) |
+| Descartar rascunho | Volta à lista; prova apagada |
+| Sair | Volta ao login; sessão apagada do aparelho |
+| `php web/testes/regras.php` | 46/46 (1 teste novo, de CORS) |
+
+Ficaram no banco a prova 11 e as folhas 151 e 152 da turma `9Z-APP` (teste).
+
+### Mudanças fora do previsto
+
+- **CORS opcional na API** (`cabecalhos_cors()` em `web/src/api.php`): só para
+  abrir o app no navegador durante o desenvolvimento. Vale para as origens de
+  `CORS_ORIGENS`; sem a variável, nada muda. A pré-verificação (`OPTIONS`) é
+  respondida com 204 antes do login.
+- **`iniciar.cmd rede`**: o servidor aceita conexões da rede local, para o
+  celular falar com o computador. Sem o argumento, continua só `localhost`.
+- **Sessão no aparelho com `expo-sqlite/localStorage`**, como recomenda a
+  documentação do Expo SDK 57 para o Supabase, em vez do AsyncStorage.
+- **Câmera própria como padrão e o scanner do sistema como opção.** O plano
+  previa o scanner de documento. Ele só funciona num development build (o Expo
+  Go não tem o módulo), e a câmera própria permite a moldura-guia e o aviso de
+  outro caderno pelo QR **antes** da foto. Os dois caminhos terminam no mesmo
+  envio; o botão "Scanner" aparece quando o módulo existe.
+- **Galeria** como terceira forma de entrar uma foto (gabarito ou folha já
+  fotografados), também usada no teste pelo navegador.
+- **Nome genérico das fotos** enviadas (`9Z-APP_folha03.jpg`), para o nome do
+  aluno nunca ir parar no servidor.
+- **Erros achados no teste e corrigidos:** (1) a redução da foto no navegador
+  saía com altura 0 (`height: null`); agora o app calcula os dois lados.
+  (2) Abrindo "Nova prova" antes da configuração chegar, o período vinha como
+  o 1º; agora o padrão é sempre o período atual da escola. (3) A imagem anotada
+  da folha (larga, cerca de 3:1) aparecia numa caixa fixa; agora usa a
+  proporção real.
+- **Erros achados no primeiro teste em Android (Expo Go) e corrigidos:**
+  (1) **o envio de toda foto falhava com "Sem conexão com o servidor"**. No
+  SDK 57, o `fetch` do celular é o `expo/fetch`, que não aceita o arquivo no
+  formato antigo do React Native (`{uri, name, type}`); o erro acontecia antes
+  de sair do aparelho. Agora a foto vai como `File` do `expo-file-system`. O
+  teste no navegador não pegava isso porque lá o `fetch` é o do navegador.
+  (2) **A moldura não correspondia à folha**: era um retângulo alto com alvos
+  nos cantos, mas os 4 quadrados da AMA marcam uma faixa larga na metade de
+  baixo da página (x de 5% a 95%, y de 58% a 84%, medidos na folha em branco).
+  Agora a moldura é o contorno da folha A4 inteira, com um alvo onde cada
+  quadrado deve ficar. (3) O campo de senha não deixa mais o teclado pôr
+  maiúscula nem corrigir a senha. (4) Sem configuração no `mobile/.env`, o
+  login avisa o que falta, em vez de "sem conexão".
+
+### Recorte no celular (2026-10-18)
+
+Pedido do Thiago: as fotos das provas não podem ir para a internet; ficam no
+aparelho onde foram tiradas, e no servidor no máximo o recorte das bolinhas,
+sem o nome do aluno, mais o QR (que por enquanto identifica só o caderno).
+
+Como fica o caminho da folha:
+
+1. O app reduz a foto (lado menor 1600 px) e procura os 4 quadrados pretos numa
+   cópia de até 1000 px (`jpeg-js` + `marcadores.ts`, sem módulo nativo novo:
+   funciona no Expo Go).
+2. Gira a foto para o lado comprido da área mais perto do alto da foto ficar em
+   cima e nivelado, e acha os marcadores de novo.
+3. Recorta a **faixa do QR** (de 0,56 a 0,33 larguras da área acima dos
+   marcadores de cima; o rótulo do nome começa em 0,30) e lê o QR nela com o
+   leitor do próprio sistema (`scanFromURLAsync`). Sem QR, tenta com a folha de
+   cabeça para baixo; sem QR nos dois, vale a primeira posição e o servidor
+   decide pelos blocos.
+4. Recorta a **área** (centros dos marcadores + 1,2 lado de marcador; 2,5 se um
+   canto foi estimado) e envia os dois recortes e o caderno lido.
+5. O servidor lê, monta a imagem guardada (QR em cima, área anotada embaixo) e
+   apaga tudo da pasta temporária.
+
+O mesmo algoritmo está em Python (`omr.recortar_para_envio`,
+`omr_cli.py recortar`), para os testes e para conferir o app com as mesmas fotos.
+
+| Teste | Resultado |
+|---|---|
+| Marcadores em TypeScript × leitor em Python, 21 fotos da 8A reduzidas a 1000 px | 21/21 iguais (diferença < 0,5 px); ~35 ms para achar, no Node |
+| Recorte em Python das 21 fotos | 21/21 com área e QR; QR lido em 21/21 (o leitor atual, na foto inteira, lê 19/20) |
+| Leitura dos recortes no servidor | 546/546 respostas certas, 12/12 marcações fracas para revisão, mesmo resultado da foto inteira |
+| Conferência visual | Os recortes do QR têm só o QR e o código impresso; os da área, só as bolinhas, os marcadores e o número abaixo da grade (ver pendências). Nenhum tem nome ou turma |
+| `pytest` | 33/33 (6 novos: recorte das 20 folhas, de cabeça para baixo, QR fora do nome, foto inteira recusada, caderno do app, imagem guardada) |
+| `regras.php` | 48/48 (1 novo: nome genérico) |
+| `testar_api.ps1` (Auth simulado, banco e Storage reais), enviando recortes | Todos os passos ok; 20 recortes lidos a ~1,0 s cada; relatório com 63,1%; foto inteira no lugar do recorte → `nao_recorte` |
+| App no navegador (Expo web, Auth simulado) | Gabarito: enviados só `gabarito_area.jpg` (107 KB), `gabarito_qr.jpg` (13 KB) e o caderno; revisão com os círculos certos sobre o recorte. Folhas 1 e 3 lidas (19/26 e 18/26) em 3 a 5 s cada, já com o servidor; modelo antigo recusado no app sem enviar nada |
+
+### Pendências e riscos
+
+- **Recorte no aparelho (7.14)**: medir o tempo do recorte num celular comum
+  (no navegador do computador foram ~2 a 4 s) e conferir a leitura do QR com o
+  leitor do Android e do iPhone. No iPhone, `scanFromURLAsync` não foi testado.
+- **Número abaixo da grade** (ex.: `6357256532`): fica na mesma linha dos
+  marcadores de baixo, então vai no recorte da área enviado. Não fica na imagem
+  guardada (que é cortada nas bolinhas). Se ele identificar o aluno (pergunta em
+  aberto, como o QR), o app precisa tapá-lo antes do envio.
+- **Painel web** continua recebendo a foto ou o PDF da folha inteira: fica só
+  para uso no computador da escola (decisão do Thiago, 2026-10-18), até ganhar
+  o recorte no navegador.
+- **Coluna `folhas.imagem` e bucket `folhas`** ficaram sem uso. Removê-los
+  pede uma migração nova, aplicada pelo Thiago.
+- A faixa do QR foi medida na folha M0801. Outros cadernos AMA com o QR em
+  outra posição precisam de conferência.
+- **Teste em aparelho (7.14)** com o roteiro, num Android e num iPhone, com o
+  login real: câmera ao vivo, leitura do QR, moldura e tempo por folha com a
+  rede da escola.
+- **Development build** para o scanner do sistema (7.12): `npx expo run:android`
+  exige o Android Studio; para iPhone, EAS Build (precisa de conta Expo e, para
+  instalar, da conta Apple da Fase 8).
+- **HTTPS** (Fase 6, 6.9): o iPhone fora do modo de desenvolvimento só fala com
+  servidor HTTPS. Depende da hospedagem.
+- **Ícone e tela de abertura** ainda são os padrões do Expo.
+- O aviso de outro caderno antes da foto compara o texto do QR com o caderno
+  da prova. Se o QR tiver mais do que o código do caderno (pergunta em aberto
+  do plano), o aviso pode aparecer à toa; quem decide continua sendo o servidor.
+- Dados de teste a apagar antes do piloto: a prova 11 ("TESTE Fase 7 - app
+  web") com as folhas da turma `9Z-APP`, a prova 21 ("TESTE Fase 6 - API 18/10",
+  do teste com recortes) e a prova 22 ("TESTE recorte no app", turma 8A), além
+  dos da Fase 6.
+
+### Diário
+
+- **2026-10-12** — Fase iniciada. Lidos o plano (Fase 7), a API
+  (`web/src/api.php`) e o formato da leitura. Node 24 e npm 11 instalados;
+  Expo SDK 57 é a versão atual. Respostas reais da API guardadas como
+  referência para os tipos do app.
+- **2026-10-12** — Projeto criado (`create-expo-app`, modelo TypeScript) e
+  dependências instaladas com `expo install`. Lida a documentação do SDK 57
+  sobre expo-router, Supabase, câmera e manipulação de imagem.
+- **2026-10-12** — Escritas as 8 telas, o cliente da API, a câmera com
+  moldura e QR e o desenho da leitura sobre a foto. CORS opcional na API, com
+  teste.
+- **2026-10-12** — Teste no navegador com o Auth simulado: fluxo completo
+  (cadastro pela foto, revisão, aprovação, escaneamento, correção, resultado,
+  digitado, descarte, sair). Três erros achados e corrigidos (ver acima).
+  Ajustes para as regras do React Compiler no `expo lint`.
+- **2026-10-12** — README do app, seção no README principal, `iniciar.cmd rede`
+  e roteiro de teste. Faltam o teste em aparelho e o development build.
+- **2026-10-12** — `mobile/.env` criado para o teste em aparelho: URL do Supabase do `.env` da raiz e API em `http://192.168.18.5:8000` (IP do computador na rede). A chave publishable não estava no `.env` da raiz; falta colá-la.
+- **2026-10-12** — Primeiro teste em Android com o Expo Go, pelo Thiago, com o
+  login real. Achados: o envio de fotos falhava (`expo/fetch` não aceita o
+  formato antigo de arquivo) e a moldura não batia com a posição dos
+  quadrados na folha AMA. Os dois foram corrigidos; falta repetir o teste.
+  Também visto: o cadastro público do Supabase continua ligado
+  (`disable_signup: false`).
+- **2026-10-12** — A pedido do Thiago, o período da prova passou de "1º a 4º
+  bimestre" para **"1ª e 2ª edição" do simulado** (pode haver mais edições).
+  Novo modo `PERIODO_ESCOLA=edicao`, agora o padrão, com a quantidade em
+  `EDICOES_SIMULADO` (padrão 2). O banco não mudou: é o mesmo campo `periodo`.
+  As provas de teste já gravadas com 4 aparecem como "4ª edição". A API manda
+  o título do campo (`periodo_rotulo`) e o app o usa. 1 teste novo (47/47).
+- **2026-10-18** — "Sem conexão com o servidor" depois do login, no app pelo
+  navegador. Causas: (1) outro projeto do Thiago (PGDT, Laravel) estava na
+  porta 8000, e o corretor tinha sido aberto sem o `rede`, então ninguém
+  atendia em `192.168.18.5:8000`; (2) faltava `CORS_ORIGENS` no `.env` para a
+  versão web. O corretor passou para a **porta 8001** (`iniciar.cmd`,
+  `mobile/.env`, `mobile/.env.exemplo`, README, `testar_api.ps1` e coleção do
+  Postman) e o `.env` ganhou `CORS_ORIGENS=http://localhost:8081`. Conferido:
+  API pelo IP da rede responde 401 sem token, a pré-verificação CORS responde
+  204 com a origem do app, e o PGDT continua na 8000.
+- **2026-10-18** — O app no celular deu "Sem conexão" de novo: o corretor
+  tinha sido aberto com dois cliques, sem o `rede`. A pedido do Thiago, o
+  `iniciar.cmd` agora **sempre aceita conexões da rede**; `iniciar.cmd local`
+  restringe ao próprio computador. READMEs e roteiro de teste atualizados.
+- **2026-10-18** — Revisão do que é guardado, a pedido do Thiago: no banco não
+  há nome de aluno; no Storage ficavam dois recortes iguais de cada folha (um
+  sem uso) e a foto inteira passava pelo servidor. Decisões do Thiago: recorte
+  no celular (área + QR), foto original guardada no app, painel só para uso
+  local, apagar os recortes de teste antigos.
+- **2026-10-18** — Recorte no celular pronto e testado (itens 7.15 a 7.18,
+  seção "Recorte no celular"). Primeiro em Python (o QR na foto inteira só saía
+  em 12 de 20 fotos; procurando na faixa acima da área, 21/21), depois em
+  TypeScript. No app, o QR é procurado só na faixa, porque a ordem dos cantos do
+  QR devolvida pelo sistema muda entre Android e iPhone. Um marcador pequeno e
+  girado era recusado no TypeScript (medida da caixa girada dependia do tamanho);
+  a medida passou a seguir a do contorno do OpenCV. 150 recortes antigos
+  apagados do bucket `folhas`.
+

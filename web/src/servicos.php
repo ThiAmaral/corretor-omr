@@ -28,7 +28,7 @@ function listar_provas(array $entrada): array
 /**
  * Cadastro de uma prova nova como rascunho, com o gabarito por foto ou digitado.
  * $dados: ano, periodo, nome (opcional), gabarito_digitado (se não houver foto).
- * $fotos: upload_normalizado() do campo da foto do gabarito.
+ * $fotos: upload_normalizado() do campo da foto do gabarito (painel) ou recorte_do_app() (app).
  * Devolve ['id' => id da prova, 'leitura' => leitura da foto ou null].
  */
 function cadastrar_prova(array $dados, array $fotos, ?string $professorId): array
@@ -39,7 +39,7 @@ function cadastrar_prova(array $dados, array $fotos, ?string $professorId): arra
         throw new ErroDoUsuario('Informe o ano letivo com quatro dígitos, por exemplo ' . date('Y') . '.');
     }
     if (!isset(periodos()[$periodo])) {
-        throw new ErroDoUsuario('Escolha o ' . PERIODO_ESCOLA . ' da prova.');
+        throw new ErroDoUsuario(PERIODO_ESCOLA === 'edicao' ? 'Escolha a edição do simulado.' : 'Escolha o ' . PERIODO_ESCOLA . ' da prova.');
     }
 
     $digitado = trim((string)($dados['gabarito_digitado'] ?? ''));
@@ -47,7 +47,7 @@ function cadastrar_prova(array $dados, array $fotos, ?string $professorId): arra
     $imagemGabarito = null;
     if ($fotos) {
         // A foto do gabarito só é lida; fica guardada apenas a área de respostas anotada.
-        $leitura = ler_folhas([guardar_upload($fotos[0])])[0];
+        $leitura = ler_folhas_ou_recortes($fotos, 'gabarito')[0];
         if (!$leitura['ok']) {
             throw new ErroDoUsuario('Não foi possível ler o gabarito: ' . $leitura['erro']
                 . ' Tire outra foto ou digite as respostas.', 422, ['codigo' => $leitura['codigo'] ?? null]);
@@ -108,6 +108,35 @@ function descartar_rascunho(array $prova): void
     apagar_do_storage(['anotadas' => array_filter([$prova['imagem_gabarito']])]);
 }
 
+/**
+ * Lê os uploads na pasta temporária: recortes do app (com 'qr') ou fotos e PDFs inteiros
+ * (painel, uso local). Os arquivos recebem nomes genéricos ($prefixo_folhaNN), nunca o
+ * nome original. Devolve a saída do leitor, com 'arquivo' = nome genérico.
+ */
+function ler_folhas_ou_recortes(array $uploads, string $prefixo, ?array $layout = null, int $primeira = 1): array
+{
+    $recorte = array_key_exists('qr', $uploads[0]);
+    $caminhos = $recortes = $nomes = [];
+    foreach (array_values($uploads) as $i => $u) {
+        if (array_key_exists('qr', $u) !== $recorte) {
+            throw new ErroDoUsuario('Envie só recortes do app ou só fotos inteiras.', 400);
+        }
+        $nome = nome_generico($prefixo, $primeira + $i, $u['ext']);
+        $c = guardar_upload($u, $nome);
+        $caminhos[] = $c;
+        $nomes[$c] = $nome;
+        if ($recorte) {
+            $recortes[] = ['area' => $c, 'qr' => $u['qr'] ? guardar_upload($u['qr'], "qr_$nome") : null,
+                'caderno' => $u['caderno']];
+        }
+    }
+    $leituras = $recorte ? ler_recortes($recortes, $layout) : ler_folhas($caminhos, $layout);
+    foreach ($leituras as &$l) {
+        $l['arquivo'] = $nomes[$l['arquivo']] ?? basename($l['arquivo']);
+    }
+    return $leituras;
+}
+
 /** Erro no Storage durante a limpeza não esconde o erro original. */
 function apagar_do_storage(array $porBucket): void
 {
@@ -137,9 +166,11 @@ function turma_valida(string $turma): string
  * Lê, corrige e grava as folhas de uma turma. Devolve uma entrada por página:
  * lida: ['id', 'arquivo', 'pagina', 'ok' => true, 'leitura' => saída do leitor]
  * recusada: ['id' (null se não for guardada), 'arquivo', 'pagina', 'ok' => false, 'erro', 'codigo'].
- * As fotos ficam só na pasta temporária; no Storage vão a área de respostas recortada
- * (sem o nome do aluno) e a imagem anotada. Com $guardarFalhas = false (app), a folha
- * recusada não é gravada: o professor tira outra foto na hora.
+ * $uploads: recortes do app (recorte_do_app) ou fotos e PDFs inteiros (painel, uso local).
+ * Tudo fica só na pasta temporária; no Storage vai apenas a área das bolinhas anotada
+ * (com o QR em cima, no recorte do app), sem o nome do aluno. No banco, o arquivo tem
+ * nome genérico (turma_folhaNN). Com $guardarFalhas = false (app), a folha recusada não
+ * é gravada: o professor tira outra foto na hora.
  */
 function ler_folhas_aluno(array $prova, string $turma, array $uploads, bool $guardarFalhas = true): array
 {
@@ -153,18 +184,14 @@ function ler_folhas_aluno(array $prova, string $turma, array $uploads, bool $gua
     $id = (int)$prova['id'];
     $layout = $prova['layout'];
     $gabarito = $prova['gabarito'];
-    $caminhos = [];
-    $nomeOriginal = [];
-    foreach ($uploads as $u) {
-        $c = guardar_upload($u);
-        $caminhos[] = $c;
-        $nomeOriginal[$c] = mb_substr($u['nome'], 0, 200);
-    }
+    $st = db()->prepare('SELECT COUNT(*) FROM folhas WHERE prova_id = ? AND turma = ?');
+    $st->execute([$id, $turma]);
+    $primeira = (int)$st->fetchColumn() + 1;
 
     // Gabarito digitado: sem formato ainda, cada folha é lida com o formato detectado,
     // e a primeira que servir define o formato e o caderno da prova.
     $semFormato = !formato_conhecido($layout);
-    $leituras = ler_folhas($caminhos, $layout);
+    $leituras = ler_folhas_ou_recortes($uploads, $turma, $layout, $primeira);
     if ($semFormato) {
         foreach ($leituras as &$l) {
             if ($l['ok'] && ($motivo = conferir_formato_da_folha($layout, $l, $gabarito)) !== null) {
@@ -176,32 +203,28 @@ function ler_folhas_aluno(array $prova, string $turma, array $uploads, bool $gua
 
     $ins = db()->prepare('INSERT INTO folhas (prova_id, turma, arquivo, pagina, imagem, imagem_debug, respostas, niveis, revisar, erro)
                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id');
-    $enviadas = ['folhas' => [], 'anotadas' => []];
+    $enviadas = ['anotadas' => []];
     $resultado = [];
     try {
         db()->beginTransaction();
         foreach ($leituras as $l) {
-            $nome = $nomeOriginal[$l['arquivo']] ?? basename($l['arquivo']);
+            $nome = $l['arquivo'];
             $item = ['id' => null, 'arquivo' => $nome, 'pagina' => $l['pagina'], 'ok' => $l['ok']];
             if ($l['ok']) {
                 $prefixo = "$id/" . bin2hex(random_bytes(8));
-                $imagem = $imagemDebug = null;
-                if (isset($l['imagem_recorte'])) {
-                    $imagem = $enviadas['folhas'][] = storage_enviar('folhas', "{$prefixo}_area.jpg", $l['imagem_recorte']);
-                }
+                $imagemDebug = null;
                 if (isset($l['imagem_debug'])) {
                     $imagemDebug = $enviadas['anotadas'][] = storage_enviar('anotadas', "{$prefixo}_anotada.jpg", $l['imagem_debug']);
                 }
                 $ins->execute([
-                    $id, $turma, $nome, $l['pagina'], $imagem, $imagemDebug,
+                    $id, $turma, $nome, $l['pagina'], null, $imagemDebug,
                     json_encode(respostas_da_leitura($l)),
                     json_encode(array_column($l['respostas'], 'niveis')),
                     json_encode(questoes_para_revisar($l)),
                     null,
                 ]);
                 $item['id'] = (int)$ins->fetchColumn();
-                $item['leitura'] = array_diff_key($l, ['arquivo' => 1, 'pagina' => 1, 'ok' => 1,
-                    'imagem_debug' => 1, 'imagem_recorte' => 1]);
+                $item['leitura'] = array_diff_key($l, ['arquivo' => 1, 'pagina' => 1, 'ok' => 1, 'imagem_debug' => 1]);
             } else {
                 $item += ['erro' => $l['erro'], 'codigo' => $l['codigo'] ?? null];
                 if ($guardarFalhas) {

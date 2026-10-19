@@ -66,8 +66,15 @@ function atender_api(array $servidor): void
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store');
     header('X-Content-Type-Options: nosniff');
+    $metodo = strtoupper($servidor['REQUEST_METHOD'] ?? 'GET');
+    foreach (cabecalhos_cors($servidor['HTTP_ORIGIN'] ?? '', (string)getenv('CORS_ORIGENS')) as $cabecalho) {
+        header($cabecalho);
+    }
+    if ($metodo === 'OPTIONS') {
+        http_response_code(204); // pré-verificação do navegador; o app no celular não faz
+        return;
+    }
     try {
-        $metodo = strtoupper($servidor['REQUEST_METHOD'] ?? 'GET');
         [$funcao, $params] = encontrar_rota($metodo, caminho_da_api($servidor['REQUEST_URI'] ?? '/'), rotas_da_api());
         $professor = autenticar_api($servidor);
         conferir_tamanho_do_envio($servidor);
@@ -89,6 +96,26 @@ function atender_api(array $servidor): void
     if ($status !== 204) {
         echo json_encode($corpo, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION);
     }
+}
+
+/**
+ * Cabeçalhos CORS para a versão web do app em desenvolvimento (npx expo start --web).
+ * O app no celular não precisa deles. Só vale para as origens listadas em CORS_ORIGENS
+ * (separadas por vírgula, ex.: http://localhost:8081); sem a variável, nenhuma.
+ */
+function cabecalhos_cors(string $origem, string $permitidas): array
+{
+    $lista = array_filter(array_map('trim', explode(',', $permitidas)));
+    if ($origem === '' || !in_array($origem, $lista, true)) {
+        return [];
+    }
+    return [
+        "Access-Control-Allow-Origin: $origem",
+        'Vary: Origin',
+        'Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers: Authorization, Content-Type',
+        'Access-Control-Max-Age: 600',
+    ];
 }
 
 /** Professor do token enviado pelo app; sem token válido, 401. */
@@ -282,6 +309,7 @@ function api_config(array $params, array $professor): array
     return [200, [
         'professor' => $professor,
         'periodo_escola' => PERIODO_ESCOLA,
+        'periodo_rotulo' => nome_da_divisao(),
         'periodos' => array_map(fn($n, $nome) => ['numero' => $n, 'nome' => $nome], array_keys(periodos()), periodos()),
         'periodo_atual' => periodo_atual(),
         'disciplinas' => disciplinas(),
@@ -313,18 +341,19 @@ function api_listar_provas(array $params, array $professor): array
 }
 
 /**
- * multipart/form-data: ano, periodo, nome (opcional) e a foto em "gabarito_imagem"
- * ou as respostas em "gabarito_digitado". Devolve o rascunho e a leitura da foto
- * (com as coordenadas das bolinhas, para o app desenhar sobre a própria foto).
+ * multipart/form-data: ano, periodo, nome (opcional) e o recorte do gabarito feito no app
+ * (área de respostas em "gabarito_imagem", QR em "gabarito_qr", caderno lido em "caderno")
+ * ou as respostas em "gabarito_digitado". Devolve o rascunho e a leitura do recorte
+ * (com as coordenadas das bolinhas, para o app desenhar sobre o próprio recorte).
  */
 function api_cadastrar_prova(array $params, array $professor): array
 {
-    $nova = cadastrar_prova($_POST, upload_normalizado($_FILES['gabarito_imagem'] ?? []), $professor['id']);
+    $nova = cadastrar_prova($_POST, recorte_do_app('gabarito_imagem', 'gabarito_qr'), $professor['id']);
     $leitura = $nova['leitura'];
     return [201, [
         'prova' => prova_json(buscar_prova($nova['id'])),
         'leitura' => $leitura === null ? null : array_diff_key($leitura,
-            ['arquivo' => 1, 'pagina' => 1, 'ok' => 1, 'imagem_debug' => 1, 'imagem_recorte' => 1]),
+            ['arquivo' => 1, 'pagina' => 1, 'ok' => 1, 'imagem_debug' => 1]),
     ]];
 }
 
@@ -386,7 +415,9 @@ function api_listar_folhas(array $params, array $professor): array
 }
 
 /**
- * multipart/form-data: turma e a foto em "folha" (ou várias em "folhas[]").
+ * multipart/form-data: turma e o recorte feito no app: área de respostas em "folha", QR em
+ * "qr" (opcional) e o caderno lido no app em "caderno" (opcional). A foto inteira, com o
+ * nome do aluno, não sai do celular; se chegar no lugar do recorte, é recusada (nao_recorte).
  * Cada página volta com a nota e as questões a revisar, ou com o motivo da recusa
  * ("erro" e "codigo", ex.: desfocada). Folha recusada não é gravada: o app pede outra foto.
  */
@@ -394,8 +425,7 @@ function api_enviar_folhas(array $params, array $professor): array
 {
     $prova = buscar_prova($params['id']);
     $turma = turma_valida((string)($_POST['turma'] ?? ''));
-    $uploads = array_merge(upload_normalizado($_FILES['folha'] ?? []), upload_normalizado($_FILES['folhas'] ?? []));
-    $resultado = ler_folhas_aluno($prova, $turma, $uploads, false);
+    $resultado = ler_folhas_aluno($prova, $turma, recorte_do_app('folha', 'qr'), false);
     $folhas = [];
     foreach ($resultado as $r) {
         if (!$r['ok']) {

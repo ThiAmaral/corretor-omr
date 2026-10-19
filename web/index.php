@@ -75,7 +75,7 @@ cabecalho('Provas');
     <label>Ano letivo
       <input type="number" name="ano" min="2000" max="2100" required value="<?= e($_POST['ano'] ?? date('Y')) ?>">
     </label>
-    <label><?= e(ucfirst(PERIODO_ESCOLA)) ?>
+    <label><?= e(nome_da_divisao()) ?>
       <select name="periodo">
         <?php $periodoEscolhido = (int)($_POST['periodo'] ?? periodo_atual()); ?>
         <?php foreach (periodos() as $n => $rotulo): ?>
