@@ -6,7 +6,8 @@ require __DIR__ . '/lib.php';
  * Relatório da prova em CSV, para abrir no Excel ou no LibreOffice em português:
  * separador ";", vírgula decimal e BOM para o UTF-8 ser reconhecido.
  *   exportar.php?id=4&tipo=questoes[&turma=8A]  uma linha por questão (prioridade, acerto, erro comum)
- *   exportar.php?id=4&tipo=turmas               uma linha por turma (acerto por disciplina e por nível)
+ *   exportar.php?id=4&tipo=turmas               uma linha por turma (acerto por disciplina e por nível,
+ *                                               precisão da leitura e faixa do acerto)
  */
 
 iniciar_pagina();
@@ -39,12 +40,14 @@ if ($tipo === 'questoes') {
     }
     $linhas[] = ['Questão', 'Disciplina', 'Habilidade', 'Gabarito', 'Dificuldade marcada', 'Alunos', 'Acertos',
         'Acerto (%)', 'Dificuldade observada', 'Diverge', 'Erro comum', 'Alunos no erro comum',
-        'Em branco ou dupla', 'Prioridade de revisão'];
-    foreach ($estatisticas as $e) {
+        'Em branco ou dupla', 'Prioridade de revisão', 'Leituras duvidosas'];
+    $duvidosas = duvidosas_por_questao($lidas, $prova['layout']['alternativas'] ?? [], count($questoes));
+    foreach ($estatisticas as $i => $e) {
         $linhas[] = [$e['numero'], $e['disciplina'], $e['habilidade'] ?? '', $e['certa'],
             DIFICULDADES[$e['dificuldade']] ?? '', $e['alunos'], $e['acertos'], numero_csv($e['taxa']),
             DIFICULDADES[$e['observada']] ?? '', $e['diverge'] ? 'sim' : '', $e['distrator'] ?? '',
-            $e['distrator'] !== null ? $e['distrator_qtd'] : '', $e['brancos'], $posicao[$e['numero']] ?? ''];
+            $e['distrator'] !== null ? $e['distrator_qtd'] : '', $e['brancos'], $posicao[$e['numero']] ?? '',
+            $duvidosas[$i]];
     }
 } else {
     $disciplinas = array_values(array_unique(array_map('disciplina_da_questao', $questoes)));
@@ -52,12 +55,16 @@ if ($tipo === 'questoes') {
     $linhas[] = array_merge(['Turma', 'Folhas', 'Acerto (%)'],
         array_map(fn($d) => "$d (%)", $disciplinas),
         array_map(fn($n) => DIFICULDADES[$n] . ' (%)', $niveis),
-        ['Para reforço', 'A revisar']);
+        ['Para reforço', 'A revisar', 'Lidas com certeza (%)', 'Duvidosas', 'Duvidosas sem conferir',
+            'Acerto mínimo (%)', 'Acerto máximo (%)']);
     foreach (resumo_por_turma($questoes, $lidas) as $t => $r) {
+        $p = precisao_da_leitura(array_filter($lidas, fn($f) => (string)$f['turma'] === (string)$t),
+            $prova['gabarito'], $prova['layout']['alternativas'] ?? []);
         $linhas[] = array_merge([(string)$t, $r['folhas'], numero_csv(pct($r['acertos'], $r['total']))],
             array_map(fn($d) => numero_csv(pct(...($r['disciplinas'][$d] ?? [0, 0]))), $disciplinas),
             array_map(fn($n) => numero_csv(pct(...($r['niveis'][$n] ?? [0, 0]))), $niveis),
-            [$r['reforco'], $r['revisar']]);
+            [$r['reforco'], $r['revisar'], numero_csv($p['pct_certeza']), $p['duvidosas'], $p['pendentes'],
+                numero_csv($p['acerto_min']), numero_csv($p['acerto_max'])]);
     }
 }
 

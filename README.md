@@ -190,6 +190,14 @@ reenviar as folhas. Novos modelos de caderno (disciplina automática) entram em
 Na página da prova, clique numa turma para ver:
 
 - **Turmas:** acerto geral, por disciplina e por nível (Fácil, Médio, Difícil).
+- **Precisão da leitura:** quantas questões foram lidas com certeza (todas as
+  bolinhas claramente vazias ou pintadas) e quantas ficaram duvidosas (marcação
+  fraca, entre 0,25 e 0,65 de preenchimento, ou dupla). As duvidosas que ninguém
+  conferiu viram a **margem do acerto** ("62,9%, pode ir de 62,5% a 66,5%"); ao
+  confirmar ou corrigir as folhas, a margem cai a zero. Mostra também quantas
+  leituras o professor corrigiu, entre as duvidosas e entre as sem dúvida (o erro
+  que o leitor não sinaliza), e as questões com mais leituras duvidosas. Tudo é
+  refeito a partir do nível de cada bolinha, guardado com a folha.
 - **Prioridades de revisão:** questões abaixo do `LIMITE_REFORCO`, da mais
   urgente para a menos urgente. Primeiro as marcadas como fáceis ou médias
   (conteúdo que a turma deveria dominar), depois as sem nível e por último as
@@ -234,7 +242,7 @@ e a chave **publishable**) e manda o token em toda chamada:
 | POST | `/api/provas/{id}/aprovar` | Aprova o rascunho (aceita o mesmo JSON do PUT) |
 | GET | `/api/provas/{id}/folhas?turma=` | Folhas lidas, com nota, e as recusadas |
 | POST | `/api/provas/{id}/folhas` | `multipart`: `turma` e o recorte feito no app: área em `folha`, faixa do QR em `qr` (opcional) e caderno lido em `caderno` (opcional). Volta com nota, acertos, questões a revisar e a leitura (coordenadas das bolinhas no recorte), ou com `erro` e `codigo`. Folha recusada não é gravada. A foto inteira no lugar do recorte é recusada (`nao_recorte`) |
-| GET | `/api/provas/{id}/relatorio?turma=` | Resumo por turma (disciplina e dificuldade), prioridades de revisão, habilidades com acerto baixo, estatísticas por questão e dificuldade marcada × observada |
+| GET | `/api/provas/{id}/relatorio?turma=` | Resumo por turma (disciplina, dificuldade e `precisao`), `precisao` das folhas mostradas (com certeza, duvidosas, conferidas, `acerto_min`/`acerto_max`, correções do professor), prioridades de revisão, habilidades com acerto baixo, estatísticas por questão (com `duvidosas`) e dificuldade marcada × observada |
 | GET | `/api/folhas/{id}` | Folha, gabarito, níveis de preenchimento e a imagem anotada (URL que vale 5 min) |
 | PUT | `/api/folhas/{id}` | Revisão manual: `{"respostas": {"12": "B", "13": null}}` (só as que mudaram) ou a lista completa. `MULTIPLA` = marcação dupla |
 

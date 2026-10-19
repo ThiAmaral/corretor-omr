@@ -186,6 +186,9 @@ button.perigo { color: var(--reforco); }
 .tabela tr.grupos th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; padding-bottom: 0; border-bottom: 0; }
 .tabela.compacta { width: auto; min-width: 280px; }
 .tabela caption { text-align: left; font-weight: 700; padding: 0 0 6px; }
+.precisao { list-style: none; padding: 0; margin: 0 0 16px; max-width: 75ch; }
+.precisao li { margin: 6px 0; }
+.precisao .dica { display: inline; }
 h3 { font-size: 17px; margin: 24px 0 8px; }
 
 /* Selo de dificuldade: as mesmas cores dos botões da revisão do gabarito */

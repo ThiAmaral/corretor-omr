@@ -90,15 +90,19 @@ export default function EscanearTurma() {
     }
   }
 
-  /** Confirma a folha (gravando as correções, se houver) e libera a câmera para a próxima. */
+  /**
+   * Confirma a folha e libera a câmera para a próxima. Com correções, ou com duvidosas
+   * conferidas, grava a revisão: a folha passa a contar como conferida na precisão da leitura.
+   */
   async function confirmar() {
     if (estado.tipo !== 'lida') return;
     const mudadas = Object.keys(estado.correcoes).length > 0;
-    if (mudadas) {
+    if (mudadas || estado.folha.revisar.length > 0) {
       setSalvando(true);
       setErroSalvar(null);
       try {
-        await api.revisarFolha(estado.folha.id, estado.correcoes);
+        // Sem mudança, manda as respostas atuais inteiras: só marca a folha como conferida.
+        await api.revisarFolha(estado.folha.id, mudadas ? estado.correcoes : estado.folha.respostas);
       } catch (e) {
         setErroSalvar(mensagemDeErro(e));
         setSalvando(false);

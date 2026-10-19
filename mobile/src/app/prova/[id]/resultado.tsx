@@ -5,7 +5,7 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 import { Aviso, Botao, Carregando, Chip, cor, estilos, FalhaAoCarregar, Secao } from '@/componentes/ui';
 import { api, ErroApi } from '@/lib/api';
 import { NOME_DIFICULDADE, nomeResposta, pct } from '@/lib/formato';
-import type { Dificuldade, Folha, Relatorio } from '@/lib/tipos';
+import type { Dificuldade, Folha, Precisao, Relatorio } from '@/lib/tipos';
 
 /** Resultado da turma: acerto geral, por disciplina e por dificuldade, e as prioridades de revisão (Fase 4). */
 export default function ResultadoTurma() {
@@ -60,6 +60,11 @@ export default function ResultadoTurma() {
             <Text style={{ fontSize: 44, fontWeight: '800', color: corDaTaxa(resumo.acerto, limites.reforco) }}>
               {pct(resumo.acerto)}
             </Text>
+            {resumo.precisao.pendentes > 0 && (
+              <Text style={estilos.dica}>
+                entre {pct(resumo.precisao.acerto_min)} e {pct(resumo.precisao.acerto_max)}, conforme as duvidosas
+              </Text>
+            )}
             <Text style={estilos.texto}>
               {resumo.folhas} {resumo.folhas === 1 ? 'folha' : 'folhas'} · {resumo.para_reforco}{' '}
               {resumo.para_reforco === 1 ? 'aluno' : 'alunos'} abaixo de {limites.reforco}%
@@ -68,6 +73,8 @@ export default function ResultadoTurma() {
               <Text style={{ color: cor.alerta }}>{resumo.a_revisar} folhas com questões a conferir</Text>
             )}
           </View>
+
+          <PrecisaoDaLeitura p={resumo.precisao} />
 
           <Secao titulo="Por dificuldade">
             <View style={estilos.cartao}>
@@ -168,5 +175,34 @@ function Barra({ rotulo, valor, limite }: { rotulo: string; valor: number | null
         />
       </View>
     </View>
+  );
+}
+
+/** Quanto da leitura é certo e quanto o acerto pode mudar com as duvidosas ainda não conferidas. */
+function PrecisaoDaLeitura({ p }: { p: Precisao }) {
+  const revisou = p.conferidas + p.conferidas_sem_duvida > 0;
+  return (
+    <Secao titulo="Precisão da leitura">
+      <View style={estilos.cartao}>
+        <Text style={estilos.texto}>
+          <Text style={{ fontWeight: '700' }}>{pct(p.pct_com_certeza)}</Text> das questões lidas com certeza ·{' '}
+          <Text style={{ fontWeight: '700' }}>{p.duvidosas}</Text> duvidosas ({pct(p.pct_duvidosas)}), marcação fraca ou dupla
+        </Text>
+        {p.pendentes > 0 ? (
+          <Text style={{ color: cor.alerta }}>
+            {p.pendentes} {p.pendentes === 1 ? 'duvidosa ainda não conferida' : 'duvidosas ainda não conferidas'}: o acerto pode
+            ir de {pct(p.acerto_min)} a {pct(p.acerto_max)}. Confira as folhas para tirar essa margem.
+          </Text>
+        ) : (
+          p.duvidosas > 0 && <Text style={{ color: cor.certo }}>Todas as duvidosas foram conferidas: sem margem no acerto.</Text>
+        )}
+        <Text style={estilos.dica}>
+          {revisou
+            ? `Correções do professor: ${p.corrigidas_duvidosas} de ${p.conferidas} duvidosas conferidas e ` +
+              `${p.corrigidas_sem_duvida} de ${p.conferidas_sem_duvida} leituras sem dúvida nas folhas revisadas.`
+            : 'Nenhuma folha conferida ainda.'}
+        </Text>
+      </View>
+    </Secao>
   );
 }

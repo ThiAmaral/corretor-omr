@@ -752,6 +752,8 @@ function carregar_folhas(array $prova): array
         }
         $f['respostas'] = json_decode($f['respostas'], true);
         $f['revisar'] = json_decode($f['revisar'], true);
+        $f['niveis'] = json_decode($f['niveis'] ?? 'null', true);
+        $f['revisada'] = in_array($f['revisada'], [true, 't', 1, '1'], true);
         $lidas[] = corrigir_folha($f, $prova['gabarito']);
     }
     return [$lidas, $falhas];
@@ -818,6 +820,111 @@ function resumo_por_turma(array $questoes, array $folhas): array
     }
     ksort($resumo, SORT_NATURAL);
     return $resumo;
+}
+
+/* ------------------------------------------------- Precisão da leitura */
+
+// Mesmos limiares do leitor (worker/omr.py): marcada a partir de 0,5; dúvida entre 0,25 e 0,65.
+const LIMIAR_MARCADA = 0.5;
+const ZONA_DUVIDA = [0.25, 0.65];
+
+/**
+ * Leitura original de uma questão, refeita a partir do nível de cada bolinha (0 = vazia,
+ * 1 = toda pintada), que fica guardado mesmo depois da correção do professor.
+ * Devolve [resposta (letra, "MULTIPLA" ou null), duvidosa (marcação fraca ou dupla)].
+ */
+function leitura_pelos_niveis(array $niveis, array $alternativas): array
+{
+    $marcadas = [];
+    $fraca = false;
+    foreach (array_values($niveis) as $i => $v) {
+        if ($v >= LIMIAR_MARCADA) {
+            $marcadas[] = $alternativas[$i] ?? null;
+        }
+        if ($v > ZONA_DUVIDA[0] && $v < ZONA_DUVIDA[1]) {
+            $fraca = true;
+        }
+    }
+    $resposta = match (count($marcadas)) {
+        0 => null,
+        1 => $marcadas[0],
+        default => 'MULTIPLA',
+    };
+    return [$resposta, $fraca || count($marcadas) > 1];
+}
+
+/**
+ * Quanto da leitura de um conjunto de folhas é certo, e quanto isso pesa no acerto.
+ * - certeza: todas as bolinhas claramente vazias ou pintadas; duvidosas: fraca ou dupla.
+ * - conferidas: duvidosas de folhas que o professor revisou; pendentes: as outras.
+ * - acerto_min / acerto_max: o acerto se cada pendente estiver errada / certa (a margem).
+ * - corrigidas_duvidosas: das conferidas, quantas o professor mudou;
+ *   corrigidas_sem_duvida: leituras sem dúvida que o professor mudou (o erro que o leitor
+ *   não sinaliza), sobre as questões sem dúvida das folhas revisadas.
+ * Folhas antigas sem os níveis entram só no acerto (sem_niveis).
+ */
+function precisao_da_leitura(array $folhas, array $gabarito, array $alternativas): array
+{
+    $c = array_fill_keys(['questoes', 'certeza', 'duvidosas', 'conferidas', 'pendentes', 'sem_niveis',
+        'corrigidas_duvidosas', 'certeza_conferida', 'corrigidas_sem_duvida', 'acertos', 'podem_cair',
+        'podem_subir'], 0);
+    foreach ($folhas as $f) {
+        $niveis = is_array($f['niveis'] ?? null) ? $f['niveis'] : null;
+        $revisada = !empty($f['revisada']);
+        foreach (array_values($gabarito) as $i => $certa) {
+            $c['questoes']++;
+            $atual = $f['respostas'][$i] ?? null;
+            $acertou = $certa !== null && $atual === $certa;
+            $c['acertos'] += (int)$acertou;
+            if ($niveis === null || !is_array($niveis[$i] ?? null)) {
+                $c['sem_niveis']++;
+                continue;
+            }
+            [$lida, $duvidosa] = leitura_pelos_niveis($niveis[$i], $alternativas);
+            $mudou = $lida !== $atual;
+            if (!$duvidosa) {
+                $c['certeza']++;
+                if ($revisada) {
+                    $c['certeza_conferida']++;
+                    $c['corrigidas_sem_duvida'] += (int)$mudou;
+                }
+                continue;
+            }
+            $c['duvidosas']++;
+            if ($revisada) {
+                $c['conferidas']++;
+                $c['corrigidas_duvidosas'] += (int)$mudou;
+            } else {
+                $c['pendentes']++;
+                $c[$acertou ? 'podem_cair' : 'podem_subir']++;
+            }
+        }
+    }
+    $t = $c['questoes'];
+    return $c + [
+        'pct_certeza' => pct($c['certeza'], $t),
+        'pct_duvidosas' => pct($c['duvidosas'], $t),
+        'margem' => pct($c['pendentes'], $t),
+        'acerto' => pct($c['acertos'], $t),
+        'acerto_min' => pct($c['acertos'] - $c['podem_cair'], $t),
+        'acerto_max' => pct($c['acertos'] + $c['podem_subir'], $t),
+        'pct_corrigidas_duvidosas' => pct($c['corrigidas_duvidosas'], $c['conferidas']),
+        'pct_corrigidas_sem_duvida' => pct($c['corrigidas_sem_duvida'], $c['certeza_conferida']),
+    ];
+}
+
+/** Quantas leituras de cada questão ficaram duvidosas (fraca ou dupla), na ordem das questões. */
+function duvidosas_por_questao(array $folhas, array $alternativas, int $questoes): array
+{
+    $n = array_fill(0, $questoes, 0);
+    foreach ($folhas as $f) {
+        foreach ((is_array($f['niveis'] ?? null) ? $f['niveis'] : []) as $i => $niv) {
+            if ($i < $questoes && is_array($niv) && leitura_pelos_niveis($niv, $alternativas)[1]) {
+                $n[$i]++;
+            }
+        }
+    }
+    return $n;
 }
 
 /**

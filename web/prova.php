@@ -39,7 +39,11 @@ $relatorio = relatorio_prova($prova, (string)($_GET['turma'] ?? ''));
     'visiveis' => $visiveis, 'disciplinas' => $disciplinas, 'niveis' => $niveis, 'estatisticas' => $estatisticas,
     'prioridades' => $prioridades, 'habilidades' => $habilidades, 'matriz' => $matriz,
     'comparadas' => $comparadas, 'iguais' => $iguais, 'divergentes' => $divergentes,
+    'precisao' => $precisao, 'precisao_por_turma' => $precisaoTurmas,
 ] = $relatorio;
+// Questões que mais deram leitura duvidosa (pode ser bolinha mal impressa ou apagada).
+$maisDuvidosas = array_values(array_filter($estatisticas, fn($q) => $q['duvidosas'] >= max(2, 0.1 * $q['alunos'])));
+usort($maisDuvidosas, fn($a, $b) => $b['duvidosas'] <=> $a['duvidosas']);
 
 // Filtros do mapa de questões
 $filtroDisciplina = in_array($_GET['disciplina'] ?? '', $disciplinas, true) ? $_GET['disciplina'] : '';
@@ -160,6 +164,54 @@ cabecalho($prova['nome'], 'index.php');
   <?php if ($filtro !== ''): ?><p class="nao-imprimir"><a href="<?= e(link_relatorio($id, [])) ?>">Mostrar todas as turmas</a></p><?php endif; ?>
 </section>
 
+<section id="precisao">
+  <h2>Precisão da leitura<?= $alvo !== '' ? ' ' . e($alvo) : '' ?></h2>
+  <p class="dica">Uma questão é lida <strong>com certeza</strong> quando todas as bolinhas estão claramente vazias ou pintadas.
+    As <strong>duvidosas</strong> (marcação fraca ou dupla) são as que o app pede para conferir.</p>
+  <ul class="precisao">
+    <li><strong><?= fmt_pct($precisao['pct_certeza']) ?></strong> lidas com certeza
+      <span class="dica">(<?= $precisao['certeza'] ?> de <?= $precisao['questoes'] ?> questões)</span></li>
+    <li><strong><?= fmt_pct($precisao['pct_duvidosas']) ?></strong> duvidosas
+      <span class="dica">(<?= $precisao['duvidosas'] ?>: <?= $precisao['conferidas'] ?> conferidas, <?= $precisao['pendentes'] ?> sem conferir)</span></li>
+    <li>Acerto <strong><?= fmt_pct($precisao['acerto']) ?></strong>
+      <?php if ($precisao['pendentes'] > 0): ?>
+        <span class="dica">pode ir de <?= fmt_pct($precisao['acerto_min']) ?> a <?= fmt_pct($precisao['acerto_max']) ?>
+          (margem de <?= fmt_pct($precisao['margem']) ?>), conforme as <?= $precisao['pendentes'] ?> duvidosas ainda não conferidas</span>
+      <?php else: ?>
+        <span class="dica">sem margem: todas as duvidosas foram conferidas</span>
+      <?php endif; ?></li>
+    <li>Correções do professor:
+      <?php if ($precisao['conferidas'] + $precisao['certeza_conferida'] === 0): ?>
+        <span class="dica">nenhuma folha revisada ainda</span>
+      <?php else: ?>
+        <span class="dica"><?= $precisao['corrigidas_duvidosas'] ?> de <?= $precisao['conferidas'] ?> duvidosas conferidas
+          (<?= fmt_pct($precisao['pct_corrigidas_duvidosas']) ?>);
+          <?= $precisao['corrigidas_sem_duvida'] ?> de <?= $precisao['certeza_conferida'] ?> leituras sem dúvida nas folhas revisadas
+          (<?= fmt_pct($precisao['pct_corrigidas_sem_duvida']) ?>), o erro que o leitor não sinaliza</span>
+      <?php endif; ?></li>
+    <?php if ($precisao['sem_niveis'] > 0): ?>
+      <li class="dica"><?= $precisao['sem_niveis'] ?> questões de folhas antigas, sem o nível das bolinhas, ficaram fora desta conta.</li>
+    <?php endif; ?>
+  </ul>
+  <?php if ($filtro === '' && count($turmas) > 1): ?>
+  <table class="tabela compacta">
+    <thead><tr><th>Turma</th><th class="num">Com certeza</th><th class="num">Duvidosas</th><th class="num">Sem conferir</th><th class="num">Acerto</th><th class="num">Faixa do acerto</th></tr></thead>
+    <tbody>
+    <?php foreach ($turmas as $t): $pt = $precisaoTurmas[$t]; ?>
+      <tr><td><?= e($t) ?></td><td class="num"><?= fmt_pct($pt['pct_certeza']) ?></td><td class="num"><?= $pt['duvidosas'] ?></td>
+        <td class="num"><?= $pt['pendentes'] ?: '' ?></td><td class="num"><?= fmt_pct($pt['acerto']) ?></td>
+        <td class="num"><?= $pt['pendentes'] ? fmt_pct($pt['acerto_min']) . ' a ' . fmt_pct($pt['acerto_max']) : '—' ?></td></tr>
+    <?php endforeach; ?>
+    </tbody>
+  </table>
+  <?php endif; ?>
+  <?php if ($maisDuvidosas): ?>
+    <p class="aviso atencao">Questões com mais leituras duvidosas:
+      <?= e(implode(', ', array_map(fn($q) => "{$q['numero']} ({$q['duvidosas']})", array_slice($maisDuvidosas, 0, 8)))) ?>.
+      Confira se a bolinha está bem impressa ou se os alunos apagaram muito nessa questão.</p>
+  <?php endif; ?>
+</section>
+
 <section id="prioridades">
   <h2>Prioridades de revisão<?= $alvo !== '' ? ' ' . e($alvo) : '' ?></h2>
   <?php if ($filtro === '' && count($turmas) > 1): ?>
@@ -246,7 +298,7 @@ cabecalho($prova['nome'], 'index.php');
         title="<?= e($q['disciplina'] . ($q['habilidade'] ? ' · ' . $q['habilidade'] : '') . ($q['dificuldade'] ? ' · ' . DIFICULDADES[$q['dificuldade']] : '')) ?>">
       <span class="bolinha"><span><?= $q['numero'] ?></span><?= selo_dificuldade($q['dificuldade'], true) ?></span>
       <strong><?= fmt_pct($q['taxa']) ?></strong>
-      <small>Certa: <?= e($q['certa']) ?><?php if ($q['distrator']): ?><br>Erro comum: <?= e($q['distrator']) ?> (<?= $q['distrator_qtd'] ?>)<?php endif; ?></small>
+      <small>Certa: <?= e($q['certa']) ?><?php if ($q['distrator']): ?><br>Erro comum: <?= e($q['distrator']) ?> (<?= $q['distrator_qtd'] ?>)<?php endif; ?><?php if ($q['duvidosas']): ?><br>Duvidosas: <?= $q['duvidosas'] ?><?php endif; ?></small>
     </li>
   <?php endforeach; ?>
   </ol>

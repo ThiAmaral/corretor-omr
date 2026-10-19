@@ -725,6 +725,7 @@ resultado. O app fica em `mobile/` e consome a API da Fase 6.
 | 7.10 | Foto reduzida para ~1600 px antes do envio | ✅ | Lado menor em 1600 px, JPEG 85% (`mobile/src/lib/foto.ts`). Gabarito de teste: 1771×2370 → 1600×2141 |
 | 7.11 | Guia de enquadramento na câmera | ✅ (código) | A moldura fixa com 4 alvos dificultava a foto (Thiago, 2026-10-18) e virou 4 cantoneiras finas perto da borda: a folha é alinhada depois da foto pelo recorte (7.15). Ficam vermelhas quando o QR é de outro caderno. Conferir no aparelho (7.14) |
 | 7.19 | Aviso do recorte na hora, antes do envio | ✅ (navegador) | Etapas na tela ("Procurando os 4 quadrados pretos...", "Lendo a folha..."). Sem os 4 quadrados, ou com o marcador menor que 11 px, o app avisa na hora e não envia nada. A área mínima dos marcadores no celular caiu de 8% para 2% da foto: com 8%, uma folha ocupando metade da tela não era aceita |
+| 7.21 | Precisão da leitura no relatório (app, painel, API, CSV) | ✅ | Pedido do Thiago (2026-10-18). Refeita a partir do nível das bolinhas, sem migração: lidas com certeza × duvidosas (fraca ou dupla), margem do acerto pelas duvidosas não conferidas, correções do professor (nas duvidosas e nas sem dúvida) e questões com mais dúvidas. Confirmar uma folha com duvidosas no app agora grava a revisão (antes só gravava se houvesse correção) |
 | 7.20 | Marcação dinâmica ao vivo e foto automática | ⏳ | Destacar os 4 quadrados na imagem da câmera e fotografar sozinho quando ficarem estáveis. Precisa de processar os quadros da câmera (`react-native-vision-camera` com frame processor), que não roda no Expo Go: fica para o development build (7.12) |
 | 7.12 | Scanner de documento (ML Kit / VisionKit) no development build | 🔄 | `react-native-document-scanner-plugin` com o plugin do Expo. Só existe no development build: o app detecta o módulo e mostra o botão "Scanner". Falta gerar o build e testar |
 | 7.13 | Roteiro de teste manual `docs/roteiro_teste_app.md` | ✅ | 24 passos, com tabela para Android e iPhone |
@@ -943,4 +944,17 @@ O mesmo algoritmo está em Python (`omr.recortar_para_envio`,
   para aproximar. Marcação ao vivo e foto automática ficam para o development
   build (7.20). Não foi possível ver as cantoneiras no navegador do painel (ele
   bloqueia a câmera): conferir no aparelho.
+- **2026-10-18** — Precisão da leitura no relatório (7.21), a pedido do Thiago
+  ("margem de erro da análise"). A leitura original de cada questão é refeita
+  pelos níveis guardados (`leitura_pelos_niveis`, mesmos limiares do leitor), o
+  que permite comparar com a resposta salva depois da revisão. Na prova 21 (20
+  folhas da 8A): 95,8% lidas com certeza, 22 duvidosas (12 fracas, 10 duplas),
+  acerto 62,9% com faixa de 62,5% a 66,5%. No app, confirmar uma folha com 3
+  duvidosas passou a contá-las como conferidas. 3 testes novos em
+  `regras.php` (51/51). Mostrado no app (resultado da turma), no painel (seção
+  "Precisão da leitura" e "Duvidosas" no mapa), na API e nos dois CSV.
+  Limite: a margem só cobre as dúvidas que o leitor sinaliza; o erro "escondido"
+  (correções em leituras sem dúvida) só ganha número com folhas revisadas, e a
+  folha revisada no app costuma ter só as duvidosas olhadas, então esse número
+  tende a ficar abaixo do real até haver conferência completa de algumas folhas.
 

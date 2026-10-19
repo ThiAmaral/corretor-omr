@@ -465,7 +465,9 @@ function api_relatorio(array $params, array $professor): array
             'por_dificuldade' => porcentagens($r['resumo'][$t]['niveis']),
             'para_reforco' => $r['resumo'][$t]['reforco'],
             'a_revisar' => $r['resumo'][$t]['revisar'],
+            'precisao' => precisao_json($r['precisao_por_turma'][$t]),
         ], $r['turmas']),
+        'precisao' => precisao_json($r['precisao']),
         'prioridades' => array_map(fn($p) => array_intersect_key($p, array_flip(['numero', 'certa', 'disciplina',
             'dificuldade', 'habilidade', 'taxa', 'distrator', 'distrator_qtd', 'brancos', 'grupo', 'motivo'])), $r['prioridades']),
         'habilidades_baixas' => $r['habilidades'],
@@ -478,6 +480,30 @@ function api_relatorio(array $params, array $professor): array
             'divergentes' => array_column($r['divergentes'], 'numero'),
         ],
     ]];
+}
+
+/** Precisão da leitura para a API (sem os contadores internos da margem). */
+function precisao_json(array $p): array
+{
+    return [
+        'questoes' => $p['questoes'],
+        'com_certeza' => $p['certeza'],
+        'duvidosas' => $p['duvidosas'],
+        'pct_com_certeza' => $p['pct_certeza'],
+        'pct_duvidosas' => $p['pct_duvidosas'],
+        'conferidas' => $p['conferidas'],
+        'pendentes' => $p['pendentes'],
+        'margem' => $p['margem'],
+        'acerto' => $p['acerto'],
+        'acerto_min' => $p['acerto_min'],
+        'acerto_max' => $p['acerto_max'],
+        'corrigidas_duvidosas' => $p['corrigidas_duvidosas'],
+        'pct_corrigidas_duvidosas' => $p['pct_corrigidas_duvidosas'],
+        'corrigidas_sem_duvida' => $p['corrigidas_sem_duvida'],
+        'conferidas_sem_duvida' => $p['certeza_conferida'],
+        'pct_corrigidas_sem_duvida' => $p['pct_corrigidas_sem_duvida'],
+        'sem_niveis' => $p['sem_niveis'],
+    ];
 }
 
 function api_ver_folha(array $params, array $professor): array

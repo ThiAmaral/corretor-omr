@@ -320,6 +320,15 @@ function relatorio_prova(array $prova, string $turma = ''): array
     $turma = in_array($turma, $turmas, true) ? $turma : '';
     $visiveis = $turma !== '' ? array_values(array_filter($lidas, fn($f) => $f['turma'] === $turma)) : $lidas;
     $estatisticas = estatisticas_das_questoes($questoes, $visiveis);
+    $alternativas = $prova['layout']['alternativas'] ?? [];
+    foreach (duvidosas_por_questao($visiveis, $alternativas, count($questoes)) as $i => $n) {
+        $estatisticas[$i]['duvidosas'] = $n;
+    }
+    $precisaoPorTurma = [];
+    foreach ($turmas as $t) {
+        $precisaoPorTurma[$t] = precisao_da_leitura(array_filter($lidas, fn($f) => (string)$f['turma'] === $t),
+            $prova['gabarito'], $alternativas);
+    }
     $matriz = matriz_de_dificuldade($estatisticas);
     return [
         'turma' => $turma,
@@ -331,6 +340,8 @@ function relatorio_prova(array $prova, string $turma = ''): array
         'disciplinas' => array_values(array_unique(array_map('disciplina_da_questao', $questoes))),
         'niveis' => niveis_da_prova($questoes),
         'estatisticas' => $estatisticas,
+        'precisao' => precisao_da_leitura($visiveis, $prova['gabarito'], $alternativas),
+        'precisao_por_turma' => $precisaoPorTurma,
         'prioridades' => prioridades_de_revisao($estatisticas),
         'habilidades' => array_values(array_filter(acerto_por_habilidade($estatisticas),
             fn($h) => $h['taxa'] !== null && $h['taxa'] < LIMITE_REFORCO)),

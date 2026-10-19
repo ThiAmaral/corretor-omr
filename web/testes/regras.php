@@ -507,4 +507,46 @@ teste('nome guardado da folha é genérico, nunca o original', function () {
     igual('7Atarde_folha01.jpg', nome_generico('7A tarde/../', 1, 'jpg'));
 });
 
+teste('leitura refeita pelos níveis das bolinhas', function () {
+    $alts = ['A', 'B', 'C', 'D'];
+    igual(['B', false], leitura_pelos_niveis([0.02, 0.95, 0.1, 0.0], $alts));
+    igual([null, false], leitura_pelos_niveis([0.0, 0.1, 0.05, 0.2], $alts));
+    igual([null, true], leitura_pelos_niveis([0.0, 0.4, 0.05, 0.0], $alts));      // fraca, abaixo de 0,5
+    igual(['C', true], leitura_pelos_niveis([0.0, 0.0, 0.55, 0.0], $alts));       // marcada, mas na dúvida
+    igual(['MULTIPLA', true], leitura_pelos_niveis([0.9, 0.0, 0.85, 0.0], $alts)); // dupla
+});
+
+teste('precisão da leitura: duvidosas, margem do acerto e correções', function () {
+    $alts = ['A', 'B'];
+    $gab = ['A', 'B', 'A', 'B'];
+    $claro = fn($l) => $l === 'A' ? [0.9, 0.0] : ($l === 'B' ? [0.0, 0.9] : [0.0, 0.0]);
+    // Folha 1, não revisada: q1 certa, q2 fraca lida em branco (pendente, errada), q3 dupla (pendente), q4 certa.
+    $f1 = ['respostas' => ['A', null, 'MULTIPLA', 'B'], 'revisada' => false,
+        'niveis' => [$claro('A'), [0.0, 0.4], [0.9, 0.9], $claro('B')]];
+    // Folha 2, revisada: q2 fraca corrigida para B; q4 sem dúvida lida A, corrigida para B.
+    $f2 = ['respostas' => ['A', 'B', 'A', 'B'], 'revisada' => true,
+        'niveis' => [$claro('A'), [0.0, 0.4], $claro('A'), $claro('A')]];
+    $p = precisao_da_leitura([$f1, $f2], $gab, $alts);
+    igual(8, $p['questoes']);
+    igual(5, $p['certeza']);
+    igual(3, $p['duvidosas']);
+    igual(2, $p['pendentes']);
+    igual(1, $p['conferidas']);
+    igual(1, $p['corrigidas_duvidosas']);
+    igual(1, $p['corrigidas_sem_duvida']);
+    igual(3, $p['certeza_conferida']);
+    igual(75.0, $p['acerto']);       // 6 de 8
+    igual(75.0, $p['acerto_min']);   // as pendentes já contam como erro
+    igual(100.0, $p['acerto_max']);  // se as 2 pendentes estiverem certas
+    igual(25.0, $p['margem']);
+    igual(100.0, $p['pct_corrigidas_duvidosas']);
+    igual(33.3, $p['pct_corrigidas_sem_duvida']);
+    igual([0, 2, 1, 0], duvidosas_por_questao([$f1, $f2], $alts, 4));
+});
+
+teste('precisão: folha antiga sem níveis entra só no acerto', function () {
+    $p = precisao_da_leitura([['respostas' => ['A'], 'revisada' => false, 'niveis' => null]], ['A'], ['A', 'B']);
+    igual([1, 1, 0, 100.0, 100.0], [$p['sem_niveis'], $p['acertos'], $p['duvidosas'], $p['acerto_min'], $p['acerto_max']]);
+});
+
 echo "$testes testes passaram.\n";

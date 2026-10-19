@@ -113,6 +113,27 @@ export type Prioridade = {
   motivo: string;
 };
 
+/** Precisão da leitura (relatório): quanto foi lido com certeza e a faixa do acerto. */
+export type Precisao = {
+  questoes: number;
+  com_certeza: number;
+  duvidosas: number;
+  pct_com_certeza: number | null;
+  pct_duvidosas: number | null;
+  conferidas: number;
+  pendentes: number;
+  margem: number | null;
+  acerto: number | null;
+  acerto_min: number | null;
+  acerto_max: number | null;
+  corrigidas_duvidosas: number;
+  pct_corrigidas_duvidosas: number | null;
+  corrigidas_sem_duvida: number;
+  conferidas_sem_duvida: number;
+  pct_corrigidas_sem_duvida: number | null;
+  sem_niveis: number;
+};
+
 export type ResumoTurma = {
   turma: string;
   folhas: number;
@@ -121,6 +142,7 @@ export type ResumoTurma = {
   por_dificuldade: Partial<Record<Dificuldade, number | null>>;
   para_reforco: number;
   a_revisar: number;
+  precisao: Precisao;
 };
 
 export type Relatorio = {
@@ -132,4 +154,5 @@ export type Relatorio = {
   recusadas: number;
   resumo: ResumoTurma[];
   prioridades: Prioridade[];
+  precisao: Precisao;
 };
