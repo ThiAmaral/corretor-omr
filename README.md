@@ -21,7 +21,9 @@ exemplos/   Gabarito real, layouts e folhas fictícias das turmas 7A e 7B;
             em exemplos/ama, a folha AMA em branco e fotos geradas a partir dela
 ```
 
-O andamento do plano de evolução fica em [PROGRESSO.md](PROGRESSO.md).
+O andamento do plano de evolução fica em [PROGRESSO.md](PROGRESSO.md). Os
+requisitos funcionais e não funcionais, com a situação de cada um e as lacunas
+priorizadas, estão em [docs/requisitos.md](docs/requisitos.md).
 
 Os dados ficam no **Supabase**: provas, questões e folhas no PostgreSQL, e uma
 imagem por folha no Supabase Storage, num bucket privado: só a área das

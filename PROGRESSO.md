@@ -20,6 +20,9 @@ Legenda: ✅ feito · 🔄 em andamento · ⏳ pendente · ⚠️ bloqueado / de
 | 7. App | 🔄 | Telas prontas e testadas no navegador (2026-10-12). Recorte no celular: a foto inteira não sai do aparelho (2026-10-18). Faltam o teste em aparelho e o build com o scanner |
 | 8. Piloto | ⏳ | |
 
+Requisitos funcionais e não funcionais, com a situação de cada um e as lacunas
+priorizadas: [docs/requisitos.md](docs/requisitos.md) (levantamento de 2026-10-20).
+
 ---
 
 ## Fase 0: preparação
@@ -957,4 +960,15 @@ O mesmo algoritmo está em Python (`omr.recortar_para_envio`,
   (correções em leituras sem dúvida) só ganha número com folhas revisadas, e a
   folha revisada no app costuma ter só as duvidosas olhadas, então esse número
   tende a ficar abaixo do real até haver conferência completa de algumas folhas.
+- **2026-10-20** — Levantamento dos requisitos de todo o projeto em
+  [docs/requisitos.md](docs/requisitos.md): 85 funcionais e 65 não funcionais,
+  cada um com prioridade, situação e evidência, mais rastreabilidade dos pedidos,
+  lacunas priorizadas e o que medir no piloto. Achados na conferência do código:
+  (1) as fotos guardadas no celular ficam fora da galeria, mas a pasta entra
+  por padrão no backup do iCloud e do Google Drive (`app.json` não desliga),
+  o que contraria a regra de as fotos não irem para a internet; (2) não há como
+  apagar uma folha nem uma prova aprovada, e uma folha fotografada duas vezes
+  conta duas vezes; (3) todo professor vê e altera todas as provas; (4) o PHP
+  chama o leitor sem limite de tempo; (5) o texto da permissão da galeria no
+  `app.json` tinha um acento gravado fora do UTF-8, **corrigido**.
 

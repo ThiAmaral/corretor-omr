@@ -39,7 +39,7 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Para escolher uma foto j· tirada do gabarito ou de uma folha.",
+          "photosPermission": "Para escolher uma foto j√° tirada do gabarito ou de uma folha.",
           "cameraPermission": "Para fotografar o gabarito oficial e as folhas de resposta dos alunos.",
           "microphonePermission": false
         }
